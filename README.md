@@ -215,7 +215,7 @@ python tools/gen_ref.py  <参考.dts> ref
 python tools/gen_sed.py  ref/patch.list ref
 
 # 4) 打包（内置编码检查，有 CRLF / BOM 会直接拒绝）
-python tools/package.py  . dist/dtbo_charge_unlock-v1.4.1.zip
+python tools/package.py  . dist/dtbo_charge_unlock-v1.4.2.zip
 ```
 
 | 测试 | 覆盖内容 |
