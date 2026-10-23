@@ -1,0 +1,25 @@
+# 统一用 LF。这些脚本要直接在设备的 sh 里跑，
+# 一旦被 checkout 成 CRLF，设备上会报
+#   sh: line N: : not found
+#   syntax error: unexpected word (expecting "in")
+# 所以这里显式钉死，不依赖各人的 core.autocrlf 设置。
+* text=auto eol=lf
+
+*.sh     text eol=lf
+*.prop   text eol=lf
+*.conf   text eol=lf
+*.sed    text eol=lf
+*.list   text eol=lf
+*.md     text eol=lf
+*.txt    text eol=lf
+*.py     text eol=lf
+*.awk    text eol=lf
+.gitignore      text eol=lf
+.gitattributes  text eol=lf
+
+# 二进制，别做任何换行转换
+*.zip           binary
+*.img           binary
+*.dtb           binary
+*.dts           -text
+bin/dtc-aarch64 binary

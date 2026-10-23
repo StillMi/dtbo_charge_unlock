@@ -1,0 +1,6 @@
+id=dtbo_charge_unlock
+name=DTBO 有线充电限制解锁
+version=v1.4.0
+versionCode=14000
+author=DeepSeek
+description=安装时立即执行：识别 A/B 槽位、提取当前 dtbo 分区（自动识别 DTBO 表大/小端与裸 DTB 三种布局）、解包为 dts、替换有线充电限制表（0~56℃ 全速）、关闭 mca_charger_thermal，重新打包并复核后刷回当前槽位，装完重启即生效。不检查 bootloader 状态（KernelSU 会伪造该属性）。刷前自动备份原镜像，刷后回读校验，连续 3 次开机未确认则自动回滚。系统 OTA 后开机自动重新应用。

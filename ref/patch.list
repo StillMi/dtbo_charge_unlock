@@ -1,0 +1,182 @@
+# 由 tools/gen_ref.py 生成：节点<TAB>属性<TAB>值
+# 运行时由 bin/patch_dts.awk 按「节点名 + 属性名」精确替换
+mca_buckchg_jeita	compatible	"mca,buckchg_jeita"
+mca_buckchg_jeita	vbat_high_hyst	<0x32>
+mca_buckchg_jeita	vbat_low_hyst	<0x32>
+mca_buckchg_jeita	vterm_buffer	<0x14>
+mca_buckchg_jeita	vbat_low_cold_hyst	<0x32>
+mca_buckchg_jeita	support_weak_chg_vterm	<0x01>
+mca_buckchg_jeita	weak_chg_vterm_cfg	<0x0a 0xc8>
+mca_buckchg_jeita	volt_para1	"4200", "670", "4500", "450"
+mca_buckchg_jeita	volt_para2	"4200", "900", "4500", "670"
+mca_buckchg_jeita	volt_para3	"4200", "1350", "4500", "900"
+mca_buckchg_jeita	jeita_para	"-65535", "-10", "0", "2", "0", "4530", "67", "null", "-10", "0", "0", "2", "271", "4530", "67", "para_n10_n2", "0", "18", "0", "2", "4000", "4510", "339", "null", "18", "55", "0", "0", "4000", "4510", "339", "null", "55", "65535", "2", "2", "0", "4060", "339", "null"
+mca_buckchg_jeita	status	"ok"
+mca_buckchg_jeita	has-global-batt-para	__BOOL__
+mca_buckchg_jeita	para_n10_n2	"4000", "271", "4530", "135"
+mca_buckchg_jeita	para_n2_3	"4000", "542", "4530", "339"
+mca_buckchg_jeita	para_3_8	"4000", "813", "4200", "678", "4530", "542"
+mca_buckchg_jeita	para_8_13	"3900", "2034", "4530", "1356"
+mca_buckchg_jeita	para_13_18	"3900", "4000", "4530", "2712"
+mca_buckchg_jeita	para_18_23	"3900", "4000", "4510", "2712"
+mca_buckchg_jeita	jeita_para_ffc	"-65535", "0", "0", "2", "0", "4060", "339", "null", "0", "18", "0", "1", "4000", "4560", "1085", "null", "18", "55", "0", "0", "4000", "4560", "1085", "null", "55", "65535", "2", "2", "0", "4060", "339", "null"
+mca_buckchg_jeita	para_ffc_18_23	"4150", "4000", "4560", "2712"
+mca_buckchg_jeita_second_para	volt_para1	"4200", "670", "4500", "450"
+mca_buckchg_jeita_second_para	volt_para2	"4200", "900", "4500", "670"
+mca_buckchg_jeita_second_para	volt_para3	"4200", "1350", "4500", "900"
+mca_buckchg_jeita_second_para	jeita_para	"-65535", "-10", "0", "2", "0", "4100", "500", "null", "-10", "0", "1", "2", "670", "4500", "230", "volt_para1", "0", "55", "2", "2", "4000", "4510", "230", "null", "55", "65535", "2", "2", "0", "4100", "230", "null"
+mca_buckchg_jeita_gbl_para	support_weak_chg_vterm	<0x01>
+mca_buckchg_jeita_gbl_para	weak_chg_vterm_cfg	<0x0a 0xc8>
+mca_buckchg_jeita_gbl_para	volt_para1	"4200", "670", "4500", "450"
+mca_buckchg_jeita_gbl_para	volt_para2	"4200", "900", "4500", "670"
+mca_buckchg_jeita_gbl_para	volt_para3	"4200", "1350", "4500", "900"
+mca_buckchg_jeita_gbl_para	jeita_para	"-65535", "-10", "0", "2", "0", "4530", "309", "null", "-10", "0", "0", "2", "370", "4530", "309", "null", "0", "18", "0", "0", "4000", "4510", "432", "null", "18", "55", "0", "0", "4000", "4510", "432", "null", "55", "65535", "2", "2", "0", "4060", "432", "null"
+mca_buckchg_jeita_gbl_para	para_3_8	"4200", "927", "4530", "618"
+mca_buckchg_jeita_gbl_para	para_8_13	"4200", "1854", "4530", "1236"
+mca_buckchg_jeita_gbl_para	para_13_18	"4200", "3708", "4530", "2472"
+mca_buckchg_jeita_gbl_para	jeita_para_ffc	"-65535", "0", "0", "2", "0", "4060", "339", "null", "0", "18", "0", "0", "4000", "4560", "1050", "null", "18", "55", "0", "0", "4000", "4560", "1050", "null", "55", "65535", "2", "2", "0", "4060", "432", "null"
+mca_buckchg_jeita_tmp_para	volt_para1	"4200", "670", "4500", "450"
+mca_buckchg_jeita_tmp_para	volt_para2	"4200", "900", "4500", "670"
+mca_buckchg_jeita_tmp_para	volt_para3	"4200", "1350", "4500", "900"
+mca_buckchg_jeita_tmp_para	jeita_para	"-65535", "-10", "0", "2", "0", "4100", "500", "null", "-10", "0", "1", "2", "670", "4500", "230", "volt_para1", "0", "55", "2", "2", "4000", "4510", "230", "null", "55", "65535", "2", "2", "0", "4100", "230", "null"
+mca_strategy_buckchg_class	compatible	"mca,strategy_buckchg"
+mca_strategy_buckchg_class	support_multi_buck	<0x00>
+mca_strategy_buckchg_class	in_dcp	<0x640>
+mca_strategy_buckchg_class	in_pd	<0x640>
+mca_strategy_buckchg_class	in_hvdcp	<0x4b0>
+mca_strategy_buckchg_class	in_hvdcp3	<0x640>
+mca_strategy_buckchg_class	in_hvdcp3p5	<0x640>
+mca_strategy_buckchg_class	in_cdp	<0x384>
+mca_strategy_buckchg_class	in_sdp	<0x1f4>
+mca_strategy_buckchg_class	in_float	<0x3e8>
+mca_strategy_buckchg_class	chg_dcp	<0x7d0>
+mca_strategy_buckchg_class	chg_pd	<0xbb8>
+mca_strategy_buckchg_class	chg_hvdcp	<0xa28>
+mca_strategy_buckchg_class	chg_hvdcp3	<0xe10>
+mca_strategy_buckchg_class	chg_hvdcp3p5	<0xe10>
+mca_strategy_buckchg_class	chg_cdp	<0x384>
+mca_strategy_buckchg_class	chg_sdp	<0x1f4>
+mca_strategy_buckchg_class	chg_float	<0x3e8>
+mca_strategy_buckchg_class	chg_batt_auth_failed	<0x7d0>
+mca_strategy_buckchg_class	ffc_temp_low	<0x00>
+mca_strategy_buckchg_class	ffc_temp_high	<0x37>
+mca_strategy_buckchg_class	allow_start_ffc_batt_soc_para	"65535", "95"
+mca_strategy_buckchg_class	pmic_fv_compensation	<0x00>
+mca_strategy_buckchg_class	pmic_wls_fv_compensation	<0x00>
+mca_strategy_buckchg_class	pmic_iterm_compensation	<0x1e>
+mca_strategy_buckchg_class	default_icl	<0x32>
+mca_strategy_buckchg_class	support_pps_100w	<0x03>
+mca_strategy_buckchg_class	drop_fv_cycle	<0x12c>
+mca_strategy_buckchg_class	revchg_quick_temp	<0x14>
+mca_strategy_buckchg_class	rev_req_vadp	<0x1964 0x1388>
+mca_strategy_buckchg_class	rev_vadp_valid_h	<0x1af4 0x1518>
+mca_strategy_buckchg_class	rev_vadp_valid_l	<0x170c 0x11f8>
+mca_strategy_buckchg_class	pmic_vacc_compensation	<0x05 0x05 0x05>
+mca_strategy_buckchg_class	status	"ok"
+mca_strategy_buckchg_class	support_reverse_quick_charge	__BOOL__
+mca_strategy_buckchg_class	support_sw_aicl	__BOOL__
+mca_strategy_buckchg_class	support_revchg_screenon	__BOOL__
+mca_strategy_quick_charge	compatible	"mca,quick_charger"
+mca_strategy_quick_charge	status	"ok"
+mca_strategy_quick_charge	batt_type	<0x00>
+mca_strategy_quick_charge	cp_type	<0x00>
+mca_strategy_quick_charge	min_vbat	<0xbb8>
+mca_strategy_quick_charge	max_vbat	<0x118a>
+mca_strategy_quick_charge	recharge_vbat	<0x109a>
+mca_strategy_quick_charge	en_buck_parallel_chg	<0x01>
+mca_strategy_quick_charge	buck_icl_fcc_curr	<0x3e8 0xbb8>
+mca_strategy_quick_charge	die_temp_max	<0x7d>
+mca_strategy_quick_charge	adp_temp_max	<0x7d>
+mca_strategy_quick_charge	div_delta_volt	<0x12c 0x12c 0x258>
+mca_strategy_quick_charge	div_delta_ibat	<0xc8 0xc8 0xc8>
+mca_strategy_quick_charge	div_single_curr	<0x1194 0x2af8 0x47e0>
+mca_strategy_quick_charge	div_max_curr	<0x1388 0x2ee0 0x47e0>
+mca_strategy_quick_charge	non_mi_pps_max_curr	<0x1194 0x2af8 0x47e0>
+mca_strategy_quick_charge	multi_ibus_th	<0x7d0 0x5dc 0x258>
+mca_strategy_quick_charge	again_multi_ibus_th	<0xdac 0xbb8 0x3e8>
+mca_strategy_quick_charge	ibus_inc_hysteresis	<0xc8 0xc8 0x64>
+mca_strategy_quick_charge	ibus_dec_hysteresis	<0xc8 0xc8 0x64>
+mca_strategy_quick_charge	open_path_th	<0x320 0x258 0x190>
+mca_strategy_quick_charge	ibus_compensation	<0x00 0x00 0x00>
+mca_strategy_quick_charge	adapter_ibus_compensation	<0x64>
+mca_strategy_quick_charge	support_mode	<0x06>
+mca_strategy_quick_charge	qc3_max_vbus_limit	<0x251c>
+mca_strategy_quick_charge	qc3_max_ibus_limit	<0x9c4>
+mca_strategy_quick_charge	qc3_ibat_max_limit	<0x1388>
+mca_strategy_quick_charge	qc3p5_max_vbus_limit	<0x2710>
+mca_strategy_quick_charge	qc3p5_max_ibus_limit	<0x898>
+mca_strategy_quick_charge	qc3p5_ibat_max_limit	<0x1130>
+mca_strategy_quick_charge	qc_taper_soc_thr	<0x64>
+mca_strategy_quick_charge	qc3_taper_vol_hys	<0x19>
+mca_strategy_quick_charge	qc3p5_taper_vol_hys	<0x14>
+mca_strategy_quick_charge	pps_taper_vol_hys	<0x05>
+mca_strategy_quick_charge	drop_fv_cycle	<0x12c>
+mca_strategy_quick_charge	drop_fv_value	<0x14>
+mca_strategy_quick_charge	support_cp_vfc	<0x01>
+mca_strategy_quick_charge	vfc_iout_fsw_map	"6000", "720", "0", "300"
+mca_strategy_quick_charge	real_curr_max	<0x445c>
+mca_strategy_quick_charge	curr_monitor_current	<0x44c0>
+mca_strategy_quick_charge	curr_monitor_time_s	<0x6e>
+mca_strategy_quick_charge	cp_switch_pmic_th	<0x5dc>
+mca_strategy_quick_charge	need_trans_div2	<0x00>
+mca_strategy_quick_charge	pdc_cp_ibus_min	<0xc8>
+mca_strategy_quick_charge	pdc_icl	<0x898 0x898 0x4b0>
+mca_strategy_quick_charge	pdc_fcc_h_hys	<0x7d0>
+mca_strategy_quick_charge	pdc_fcc_l_hys	<0x3e8>
+mca_strategy_quick_charge	enable_cp_para_pdc	"300", "70", "90", "97", "900", "90", "80", "90", "1200", "200", "80", "80", "65535", "250", "70", "70"
+mca_strategy_quick_charge	pmic_dynamic_enter_para	"300", "20", "800", "30", "1200", "40", "65535", "60"
+mca_strategy_quick_charge	drop_fcc_para	"300", "0", "800", "500", "65535", "1000"
+mca_strategy_quick_charge	enable_cp_para	"300", "70", "90", "800", "90", "85", "1200", "200", "80", "65535", "250", "70"
+mca_strategy_quick_charge	batt_para	"0", "atl", "batt_para_atl"
+mca_strategy_quick_charge	temp_para1	"-65535", "0", "0", "0", "0", "null", "null", "null", "null", "0", "55", "2", "2", "12000", "volt_para1", "volt_para1", "stage_para1", "stage_para1", "55", "65535", "0", "0", "0", "null", "null", "null", "null"
+mca_strategy_quick_charge	volt_para1	"4100", "12000", "10000", "4300", "10000", "6000", "4400", "6000", "1200"
+mca_strategy_quick_charge	stage_para1	<0x00 0x00 0x00 0x00 0x00 0x00>
+mca_strategy_quick_charge	vstep_para	"1", "300", "2000", "0", "2", "2", "300", "2000", "0", "4", "4", "300", "8000", "20", "20", "4", "300", "3000", "20", "7", "4", "300", "1000", "10", "5", "1", "800", "2000", "0", "2", "2", "800", "2000", "0", "4", "4", "800", "8000", "0", "10", "4", "800", "6000", "0", "5", "4", "800", "4000", "0", "2"
+mca_strategy_quick_charge	vstep_dec_para	"1", "0", "2000", "0", "2", "2", "0", "2000", "0", "4", "2", "0", "0", "0", "2", "4", "0", "8000", "0", "20", "4", "0", "4000", "0", "10", "4", "0", "1000", "0", "5", "4", "0", "0", "0", "2"
+mca_strategy_quick_charge	has-global-batt-para	__BOOL__
+mca_strategy_quick_charge	support_cancel_compensation	__BOOL__
+mca_strategy_quick_charge	max_vbat_threshold	<0x11e4>
+mca_strategy_quick_charge	buck_en_th	<0x32c8 0x9c4>
+mca_strategy_quick_charge	buck_dis_th	<0x32c8 0xf0a>
+mca_strategy_quick_charge	batt_para_atl	"-65535", "0", "0", "2", "0", "null", "null", "null", "null", "0", "55", "0", "0", "18400", "normal_para_25_35", "ffc_para_25_35", "null", "ffc_stage_25_35", "55", "65535", "2", "0", "0", "null", "null", "null", "null"
+mca_strategy_quick_charge	normal_para_13_18	"3895", "4068", "2712", "4525", "2712", "800"
+mca_strategy_quick_charge	normal_para_18_23	"3895", "10170", "2712", "4505", "2712", "800"
+mca_strategy_quick_charge	ffc_para_18_23	"3895", "10170", "7458", "3995", "7458", "5424", "4145", "5424", "2712", "4555", "2712", "881"
+mca_strategy_quick_charge	ffc_stage_18_23	<0x00 0x01 0x00 0x00 0x00 0x00 0x00 0x00>
+mca_strategy_quick_charge	normal_para_23_25	"4285", "18400", "5424", "4505", "5424", "800"
+mca_strategy_quick_charge	ffc_para_23_25	"4285", "18400", "12400", "4345", "12400", "8136", "4395", "8136", "5424", "4555", "5424", "1085"
+mca_strategy_quick_charge	ffc_stage_23_25	<0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00>
+mca_strategy_quick_charge	normal_para_25_35	"4285", "18400", "8136", "4505", "8136", "800"
+mca_strategy_quick_charge	ffc_para_25_35	"4285", "18400", "12400", "4345", "12400", "12204", "4395", "12204", "10170", "4495", "10170", "8136", "4555", "8136", "1085"
+mca_strategy_quick_charge	ffc_stage_25_35	<0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00>
+mca_strategy_quick_charge	normal_para_35_40	"4285", "18400", "8136", "4495", "8136", "800"
+mca_strategy_quick_charge	ffc_para_35_40	"4285", "18400", "12400", "4345", "12400", "12204", "4395", "12204", "10170", "4495", "10170", "8136", "4555", "8136", "1763"
+mca_strategy_quick_charge	ffc_stage_35_40	<0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00>
+mca_strategy_quick_charge	normal_para_40_48	"4285", "18400", "8136", "4485", "8136", "800"
+mca_strategy_quick_charge	ffc_para_40_48	"4285", "18400", "12400", "4345", "12400", "12204", "4395", "12204", "10170", "4495", "10170", "8136", "4555", "8136", "2644"
+mca_strategy_quick_charge	ffc_stage_40_48	<0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00>
+mca_quick_charge_batt_para_gbl	batt_para	"0", "atl", "batt_para_atl"
+mca_quick_charge_batt_para_gbl	temp_para1	"-65535", "0", "0", "0", "0", "null", "null", "null", "null", "0", "55", "2", "2", "12000", "volt_para1", "volt_para1", "stage_para1", "stage_para1", "55", "65535", "0", "0", "0", "null", "null", "null", "null"
+mca_quick_charge_batt_para_gbl	volt_para1	"4100", "12000", "10000", "4300", "10000", "6000", "4400", "6000", "1200"
+mca_quick_charge_batt_para_gbl	stage_para1	<0x00 0x00 0x00 0x00 0x00 0x00>
+mca_quick_charge_batt_para_gbl	vstep_para	"1", "300", "2000", "0", "2", "2", "300", "2000", "0", "4", "4", "300", "8000", "20", "20", "4", "300", "3000", "20", "7", "4", "300", "1500", "10", "5", "1", "800", "2000", "0", "2", "2", "800", "2000", "0", "4", "4", "800", "8000", "0", "10", "4", "800", "6000", "0", "5", "4", "800", "4000", "0", "2"
+mca_quick_charge_batt_para_gbl	batt_para_atl	"-65535", "0", "0", "2", "0", "null", "null", "null", "null", "0", "55", "0", "0", "18400", "normal_para_23_38", "ffc_para_23_38", "null", "ffc_stage_23_38", "55", "65535", "2", "0", "0", "null", "null", "null", "null"
+mca_quick_charge_batt_para_gbl	normal_para_13_18	"4195", "3708", "2472", "4525", "2472", "800"
+mca_quick_charge_batt_para_gbl	normal_para_18_23	"4245", "12360", "8136", "4505", "7416", "800"
+mca_quick_charge_batt_para_gbl	ffc_para_18_23	"4245", "12360", "9270", "4495", "9270", "7416", "4555", "7416", "800"
+mca_quick_charge_batt_para_gbl	ffc_stage_18_23	<0x00 0x01 0x00 0x00 0x00 0x00>
+mca_quick_charge_batt_para_gbl	normal_para_23_38	"4225", "18400", "7416", "4495", "7416", "800"
+mca_quick_charge_batt_para_gbl	ffc_para_23_38	"4225", "18400", "12400", "4325", "12400", "11124", "4395", "11124", "9270", "4495", "9270", "7416", "4555", "7416", "1688"
+mca_quick_charge_batt_para_gbl	ffc_stage_23_38	<0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00>
+mca_quick_charge_batt_para_gbl	normal_para_38_43	"4225", "18400", "7416", "4485", "7416", "800"
+mca_quick_charge_batt_para_gbl	ffc_para_38_43	"4225", "18400", "12400", "4325", "12400", "11124", "4395", "11124", "9270", "4495", "9270", "7416", "4555", "7416", "2720"
+mca_quick_charge_batt_para_gbl	ffc_stage_38_43	<0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00>
+mca_quick_charge_batt_para_gbl	normal_para_43_48	"4225", "18400", "7416", "4485", "7416", "800"
+mca_quick_charge_batt_para_gbl	ffc_para_43_48	"4225", "18400", "12400", "4325", "12400", "11124", "4395", "11124", "9270", "4495", "9270", "7416", "4555", "7416", "4264"
+mca_quick_charge_batt_para_gbl	ffc_stage_43_48	<0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00>
+mca_charger_thermal	compatible	"mca_charger_thermal"
+mca_charger_thermal	support_wireless	<0x01>
+mca_charger_thermal	wireless_phone_level	<0x0c>
+mca_charger_thermal	wired_thermal	<0x76c 0x5dc 0x76c 0xbb8 0x34bc 0x34bc 0x34bc 0x34bc 0x34bc 0x34bc 0x76c 0x5dc 0x76c 0xbb8 0x2af8 0x2af8 0x2af8 0x2af8 0x2af8 0x2af8 0x76c 0x5dc 0x76c 0xbb8 0x2328 0x2328 0x2328 0x2328 0x2328 0x2328 0x76c 0x5aa 0x76c 0xbb8 0x1f40 0x1f40 0x1f40 0x1f40 0x1f40 0x1f40 0x76c 0x578 0x76c 0xbb8 0x1b58 0x1b58 0x1b58 0x1b58 0x1b58 0x1b58 0x76c 0x546 0x76c 0xaf0 0x1770 0x1770 0x1770 0x1770 0x1770 0x1770 0x76c 0x514 0x76c 0xa28 0x1388 0x1388 0x1388 0x1388 0x1388 0x1388 0x76c 0x47e 0x76c 0x906 0x1194 0x1194 0x1194 0x1194 0x1194 0x1194 0x6a4 0x44c 0x6a4 0x898 0xdac 0xdac 0xdac 0xdac 0xdac 0xdac 0x640 0x3e8 0x640 0x7d0 0xbb8 0xbb8 0xbb8 0xbb8 0xbb8 0xbb8 0x578 0x384 0x5dc 0x7d0 0x9c4 0x9c4 0x9c4 0x9c4 0x9c4 0x9c4 0x4b0 0x352 0x5dc 0x7d0 0x7d0 0x7d0 0x7d0 0x7d0 0x7d0 0x7d0 0x44c 0x2ee 0x5dc 0x5dc 0x5dc 0x5dc 0x5dc 0x5dc 0x5dc 0x5dc 0x44c 0x28a 0x3e8 0x3e8 0x3e8 0x3e8 0x3e8 0x3e8 0x3e8 0x3e8 0x44c 0x258 0x1f4 0x1f4 0x1f4 0x1f4 0x1f4 0x1f4 0x1f4 0x1f4>
+mca_charger_thermal	wireless_thermal	<0x352 0x3e8 0x44c 0x384 0xd48 0x1130 0x2328 0x2328 0x898 0x1130 0x2328 0x352 0x3e8 0x44c 0x2ee 0xc80 0x1068 0x1f40 0x1f40 0x898 0x1068 0x1f40 0x352 0x3e8 0x44c 0x28a 0x898 0xd48 0x1b58 0x1b58 0x3e8 0xd48 0x1b58 0x2bc 0x3e8 0x44c 0x28a 0x708 0xaf0 0x1770 0x1770 0x3e8 0xaf0 0x1770 0x2bc 0x3e8 0x2bc 0x28a 0x5dc 0xa28 0x1388 0x1388 0x320 0xa28 0x1388 0x1f4 0x3e8 0x2bc 0x28a 0x514 0x898 0xfa0 0xfa0 0x320 0x898 0xfa0 0x1f4 0x2bc 0x258 0x190 0x44c 0x898 0xdac 0xdac 0x2bc 0x898 0xdac 0x1f4 0x2bc 0x258 0x190 0x3e8 0x708 0xbb8 0xbb8 0x2bc 0x708 0xbb8 0x1f4 0x1f4 0x1f4 0x12c 0x320 0x44c 0x9c4 0x9c4 0x258 0x5dc 0x9c4 0x190 0x1f4 0x1f4 0x12c 0x2bc 0x3e8 0x7d0 0x7d0 0x258 0x578 0x7d0 0x190 0x1f4 0x1f4 0xfa 0x258 0x320 0x5dc 0x5dc 0x1f4 0x514 0x5dc 0x190 0x1f4 0x1f4 0xfa 0x1f4 0x2bc 0x3e8 0x3e8 0x1f4 0x384 0x3e8 0x12c 0x1f4 0x1f4 0xfa 0x1f4 0x258 0x320 0x320 0x190 0x258 0x320 0x12c 0x190 0x190 0xc8 0x190 0x1f4 0x1f4 0x1f4 0x190 0x1f4 0x1f4 0x12c 0x12c 0x12c 0x96 0x12c 0x190 0x190 0x190 0x12c 0x190 0x190>
+mca_charger_thermal	status	"disabled"
