@@ -1,0 +1,178 @@
+#!/system/bin/sh
+# ============================================================================
+# monitor.sh 自测：造一棵假的 sysfs + 模块目录，检查输出字段。
+#
+# 用法: sh tools/test_monitor.sh <模块目录> <沙盒目录>
+# ============================================================================
+set -u
+
+MODDIR_SRC="$1"
+SB="$2"
+
+[ -n "$MODDIR_SRC" ] && [ -n "$SB" ] || {
+	echo "用法: sh $0 <模块目录> <沙盒目录>"
+	exit 2
+}
+
+rm -rf "$SB"
+mkdir -p "$SB" || exit 1
+
+SYS="$SB/sys"
+MOD="$SB/mod"
+
+fail=0
+ok()   { echo "  ok   $1"; }
+bad()  { echo "  FAIL $1"; fail=$((fail + 1)); }
+
+# 断言输出里有 key=value
+expect() {  # expect <输出文件> <键> <期望值>
+	_v=$(grep "^$2=" "$1" 2>/dev/null | head -n 1 | cut -d= -f2-)
+	if [ "$_v" = "$3" ]; then
+		ok "$2 = $3"
+	else
+		bad "$2 期望 [$3]，实际 [$_v]"
+	fi
+}
+
+w() {  # w <路径> <内容>
+	mkdir -p "${1%/*}" 2>/dev/null
+	printf '%s\n' "$2" > "$1"
+}
+
+# ------------------------------------------------------------ 假 sysfs ---
+PS="$SYS/class/power_supply"
+w "$PS/battery/capacity" 73
+w "$PS/battery/status" "Charging"
+w "$PS/battery/present" 1
+w "$PS/battery/health" "Good"
+w "$PS/battery/technology" "Li-ion"
+w "$PS/battery/temp" 352
+w "$PS/battery/current_now" 2800000
+w "$PS/battery/voltage_now" 4100000
+w "$PS/battery/charge_counter" 3150000
+w "$PS/battery/cycle_count" 142
+w "$PS/battery/constant_charge_current_max" 6000000
+w "$PS/battery/input_current_limit" 3000000
+
+w "$PS/usb/online" 1
+w "$PS/usb/type" "USB_PD"
+w "$PS/usb/voltage_now" 9000000
+w "$PS/usb/current_max" 3000000
+w "$PS/usb/voltage_max" 9000000
+w "$PS/usb/real_type" "USB_PD"
+w "$PS/usb/pd_active" 1
+
+w "$PS/ac/online" 0
+w "$PS/wireless/online" 0
+
+w "$SYS/class/thermal/thermal_zone0/type" "battery"
+w "$SYS/class/thermal/thermal_zone0/temp" 352
+w "$SYS/class/thermal/thermal_zone1/type" "charger_therm0"
+w "$SYS/class/thermal/thermal_zone1/temp" 418
+w "$SYS/class/thermal/thermal_zone2/type" "cpu-0-0"      # 应被过滤
+w "$SYS/class/thermal/thermal_zone2/temp" 999
+w "$SYS/class/thermal/thermal_zone3/type" "pm8550_tz"
+w "$SYS/class/thermal/thermal_zone3/temp" 38000        # 毫度，异常单位
+
+# ------------------------------------------------------- 假模块目录 ---
+mkdir -p "$MOD/state" "$MOD/backup"
+
+cat > "$MOD/module.prop" <<'EOF'
+id=dtbo_charge_unlock
+name=测试模块
+version=v9.9.9
+versionCode=99999
+author=Tester
+EOF
+
+cat > "$MOD/config.conf" <<'EOF'
+# 注释
+FFC_TEMP_LOW=0
+FFC_TEMP_HIGH=56
+FFC_REF_HIGH=55
+DRY_RUN=0
+EOF
+
+printf '%s\n' "abc123def456" > "$MOD/state/last_sha"
+printf '%s\n' "000111222333" > "$MOD/state/orig_sha"
+printf '%s\n' "/dev/block/sde18" > "$MOD/state/part"
+printf '%s\n' "$MOD/backup/dtbo_a_x.img" > "$MOD/state/pending"
+printf '%s\n' "tok-99" > "$MOD/state/pending_id"
+printf '%s\n' "1" > "$MOD/state/pending_tries"
+printf '%s\n' "0" > "$MOD/state/confirmed"
+# 注意：state/halted 是「文件存在即停用」，不是看内容，这里先不建
+
+# 两份备份，时间上后一份更新
+dd if=/dev/zero of="$MOD/backup/dtbo_a_old.img" bs=1024 count=4 2>/dev/null
+sleep 1
+dd if=/dev/zero of="$MOD/backup/dtbo_a_new.img" bs=1024 count=8 2>/dev/null
+touch -t 202001010000 "$MOD/backup/dtbo_a_old.img"
+
+OUT="$SB/out.txt"
+SYSFS_ROOT="$SYS" MODDIR="$MOD" sh "$MODDIR_SRC/monitor.sh" > "$OUT" 2>"$SB/err.txt"
+rc=$?
+
+echo "== 基本 =="
+[ "$rc" = "0" ] && ok "退出码 0" || bad "退出码 $rc"
+[ -s "$OUT" ] && ok "有输出（$(wc -l < "$OUT" | tr -d ' ') 行）" || bad "输出为空"
+[ -s "$SB/err.txt" ] && { echo "  stderr:"; sed 's/^/    /' "$SB/err.txt"; }
+
+echo "== 电池 =="
+expect "$OUT" capacity 73
+expect "$OUT" status "Charging"
+expect "$OUT" temp_raw 352
+expect "$OUT" current_now 2800000
+expect "$OUT" voltage_now 4100000
+expect "$OUT" cycle_count 142
+expect "$OUT" health "Good"
+expect "$OUT" batt_dir "$PS/battery"
+
+echo "== 电源 =="
+expect "$OUT" src.usb.online 1
+expect "$OUT" src.usb.type "USB_PD"
+expect "$OUT" src.ac.online 0
+expect "$OUT" src.wireless.online 0
+
+echo "== 温度区 =="
+expect "$OUT" thermal.count 3
+expect "$OUT" thermal.0 "battery|352"
+expect "$OUT" thermal.1 "charger_therm0|418"
+expect "$OUT" thermal.2 "pm8550_tz|38000"
+
+echo "== 模块状态 =="
+expect "$OUT" module_version "v9.9.9"
+expect "$OUT" module_author "Tester"
+expect "$OUT" state_last_sha "abc123def456"
+expect "$OUT" state_pending "$MOD/backup/dtbo_a_x.img"
+expect "$OUT" state_pending_tries 1
+expect "$OUT" state_halted 0
+expect "$OUT" backup_file "$MOD/backup/dtbo_a_new.img"
+expect "$OUT" backup_size 8192
+expect "$OUT" backup_count 2
+expect "$OUT" cfg_ffc_low 0
+expect "$OUT" cfg_ffc_high 56
+expect "$OUT" cfg_dry_run 0
+
+echo "== 没有电池节点时也要能跑 =="
+mv "$PS/battery" "$PS/battery.off"
+SYSFS_ROOT="$SYS" MODDIR="$MOD" sh "$MODDIR_SRC/monitor.sh" > "$SB/out2.txt" 2>&1
+rc2=$?
+[ "$rc2" = "0" ] && ok "退出码 0" || bad "退出码 $rc2"
+expect "$SB/out2.txt" batt_dir ""
+expect "$SB/out2.txt" capacity ""
+expect "$SB/out2.txt" module_version "v9.9.9"
+mv "$PS/battery.off" "$PS/battery"
+
+echo "== halted 按文件存在判定 =="
+printf '%s\n' "rolled-back 2026-01-01 00:00:00" > "$MOD/state/halted"
+SYSFS_ROOT="$SYS" MODDIR="$MOD" sh "$MODDIR_SRC/monitor.sh" > "$SB/out3.txt" 2>&1
+expect "$SB/out3.txt" state_halted 1
+rm -f "$MOD/state/halted"
+
+echo ""
+if [ "$fail" -eq 0 ]; then
+	echo "=== monitor.sh 自测通过 ==="
+	exit 0
+fi
+echo "=== monitor.sh 自测失败：$fail 项 ==="
+exit 1

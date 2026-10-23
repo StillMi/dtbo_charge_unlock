@@ -72,7 +72,7 @@
 
 ## 二、安装与使用
 
-1. 用 KernelSU（或 Magisk）安装 `dtbo_charge_unlock-v1.2.0.zip`。
+1. 用 KernelSU（或 Magisk）安装 `dtbo_charge_unlock-v1.5.0.zip`。
    **安装过程中就会刷写**，安装界面能看到完整过程与结果。
 2. 安装完成 → 重启手机 → 新 `dtbo` 生效。
 
@@ -87,6 +87,25 @@ su -c "sh /data/adb/modules/dtbo_charge_unlock/action.sh"
 
 之后模块不会每次开机都重刷：它按镜像 sha256 判断，只有检测到 `dtbo`
 被换过（例如 OTA）才会重新应用。
+
+### 在 KernelSU 里看充电状态（WebUI）
+
+模块带一个网页界面。装好后在 KernelSU 管理器的模块详情页点「打开」，
+或从模块卡片进入，即可实时查看：
+
+* 电量、功率、电流、电压、电池温度
+* 充电状态与供电来源（USB/PD/无线，含握手电压与电流上限）
+* **全速充电温度窗口**：`config.conf` 里的 0~56℃ 目标区间，以及当前温度落在窗口内还是越界
+* 功率与温度的实时曲线（最近 5 分钟）
+* 电池/充电/PMIC 相关温度区
+* 模块自身状态：是否已应用、上次刷写时间、是否在等开机确认、备份情况
+
+这个页面是**只读**的：只用 `ksu.exec` 跑 `monitor.sh` 读 `/sys`、`/proc`
+和模块自己的 `state/`，不写任何分区、不改任何配置，也不会触发刷写。
+所以放心开着看，不会影响已生效的 dtbo。
+
+温度窗口那条只是「目标值」，实际充电功率还受充电器、线材、SoC 温度等影响，
+页面不会把这些混为一谈。
 
 ## 三、安全机制
 
@@ -147,8 +166,13 @@ dtbo_charge_unlock/
 ├── action.sh             KernelSU「操作」按钮 / 手动执行
 ├── restore.sh            手工回滚
 ├── dump.sh               只读导出：拆出每个 DTB 存成 .dtb/.dts，并生成参数汇总
+├── monitor.sh            只读采集充电状态（WebUI 用，输出 key=value）
 ├── uninstall.sh          卸载时把备份留存到 /sdcard/Download（不改分区）
 ├── bin/dtc-aarch64       静态链接的 aarch64 dtc 1.8.1
+├── webroot/              WebUI 页面（KernelSU 从这里加载）
+│   ├── index.html        页面入口
+│   ├── style.css         样式
+│   └── app.js            逻辑（解析 monitor.sh 输出、画曲线）
 ├── ref/
 │   ├── patch.sed         改写脚本（含温度占位符）
 │   ├── patch.list        改写规则原始表（节点/属性/取值）
@@ -210,13 +234,36 @@ sh tools/test_rollback.sh  . build/part_dtbo.img  /path/to/dtc build/sb_rb
 sh tools/test_edge.sh      . build/part_dtbo.img  /path/to/dtc build/sb_edge
 sh tools/test_module.sh    . build/part_dtbo.img  /path/to/dtc build/sandbox
 
+# 2b) WebUI 采集脚本自测（造一棵假 sysfs，检查每个输出字段）
+sh tools/test_monitor.sh   . build/sb_mon
+
 # 3) 重新生成改写规则（换了参考 dts 才需要）
 python tools/gen_ref.py  <参考.dts> ref
 python tools/gen_sed.py  ref/patch.list ref
 
 # 4) 打包（内置编码检查，有 CRLF / BOM 会直接拒绝）
-python tools/package.py  . dist/dtbo_charge_unlock-v1.4.2.zip
+python tools/package.py  . dist/dtbo_charge_unlock-v1.5.0.zip
 ```
+
+WebUI 的页面逻辑也可以在 PC 上验证，不需要设备。做法是造一个假的 `ksu`
+桥接，把 `monitor.sh` 的真实输出喂进去，再用无头 Chromium 跑一遍并断言：
+
+```sh
+# 5) 先采一份 monitor.sh 的输出当数据源
+SYSFS_ROOT=build/sb_mon/sys MODDIR=build/sb_mon/mod sh monitor.sh > build/monitor_sample.txt
+
+# 6) 渲染 + 断言（需要一个 Chromium 内核浏览器的路径）
+python tools/mkwebui_harness.py . build/webui build/monitor_sample.txt
+<浏览器> --headless=new --virtual-time-budget=16000 \
+         --dump-dom "file:///<绝对路径>/build/webui/index.html" > build/dom.html
+
+# 7) 状态分支：充电中 / 放电 / 已充满 / 过热越界 / 低于下限 / 已停用 / 无电池节点
+python tools/webui_scenarios.py . build/wsc "<浏览器路径>" build/monitor_sample.txt
+```
+
+页面里的断言会检查：有没有 JS 异常、各字段是否真的填上了数值、
+电量环是否绘制、两条曲线是否有像素、温度标记是否越界变红、
+以及有没有横向溢出。这样 UI 改动不必靠肉眼确认。
 
 | 测试 | 覆盖内容 |
 | --- | --- |
@@ -226,6 +273,7 @@ python tools/package.py  . dist/dtbo_charge_unlock-v1.4.2.zip
 | `test_rollback.sh` | 连续 3 次开机未确认 → 自动回滚 → 写 `halted` → 后续跳过 |
 | `test_edge.sh` | 令牌匹配/不匹配、同一次开机内刷写不计数、校验器正反两向、`FORCE_SLOT` |
 | `test_module.sh` | DTBO 表（3 条目 / 单条目 / 混合板型 / **大端+紧凑布局**）、裸 DTB 单段与双段、已刷过跳过、演练模式、A/B 与单分区槽位 |
+| `test_monitor.sh` | WebUI 采集脚本：电池/电源/温度区字段、模块状态四态、无电池节点时降级 |
 
 辅助脚本：
 
@@ -234,6 +282,8 @@ python tools/package.py  . dist/dtbo_charge_unlock-v1.4.2.zip
 | `tools/inspect_dtbo.py` | 打印 dtbo 镜像的表头与条目（两种字节序都试），定位结构问题 |
 | `tools/verify_real.py` | 独立校验产物：字节序/id/rev/custom/重叠/尾部零填充 + 关键充电参数 |
 | `tools/check_bytes.py` | `FFC_TEMP_HIGH=55` 时逐字节核对产物与参考 dtb |
+| `tools/mkwebui_harness.py` | 生成 WebUI 离线自测页（注入假 `ksu` 桥接） |
+| `tools/webui_scenarios.py` | WebUI 各状态分支的无头浏览器自测 |
 
 > **行尾必须是 LF。** `package.py` 打包前会检查每个文本文件，发现
 > `CR`（CRLF 行尾）、UTF-8 BOM、NUL 或非法 UTF-8 就直接拒绝打包。

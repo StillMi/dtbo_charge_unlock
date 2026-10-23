@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>充电状态</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header>
+  <div class="head-main">
+    <h1>充电状态</h1>
+    <div class="head-sub">
+      <span id="devModel">—</span>
+      <span class="dot"></span>
+      <span id="modVer">—</span>
+    </div>
+  </div>
+  <div class="head-actions">
+    <button id="btnRefresh" type="button" title="立即刷新">刷新</button>
+    <label class="auto">
+      <input type="checkbox" id="autoToggle" checked>
+      <span>自动</span>
+    </label>
+  </div>
+</header>
+
+<div id="banner" class="banner hidden"></div>
+
+<main>
+
+  <!-- ---------------------------------------------------------- 主状态 --- -->
+  <section class="card hero">
+    <div class="ring-wrap">
+      <svg class="ring" viewBox="0 0 120 120" aria-hidden="true">
+        <circle class="ring-bg" cx="60" cy="60" r="52"></circle>
+        <circle class="ring-fg" id="ringFg" cx="60" cy="60" r="52"></circle>
+      </svg>
+      <div class="ring-text">
+        <b id="capValue">--</b><small>%</small>
+      </div>
+    </div>
+    <div class="hero-side">
+      <div class="power">
+        <b id="powerValue">--</b><small>W</small>
+      </div>
+      <div class="chip" id="statusChip">—</div>
+      <div class="hero-note" id="sourceNote">—</div>
+    </div>
+  </section>
+
+  <!-- ------------------------------------------------------------ 指标 --- -->
+  <section class="grid">
+    <div class="card tile">
+      <span class="t-label">电流</span>
+      <span class="t-value"><b id="mCurrent">--</b><i>A</i></span>
+    </div>
+    <div class="card tile">
+      <span class="t-label">电压</span>
+      <span class="t-value"><b id="mVoltage">--</b><i>V</i></span>
+    </div>
+    <div class="card tile">
+      <span class="t-label">电池温度</span>
+      <span class="t-value"><b id="mTemp">--</b><i>℃</i></span>
+    </div>
+    <div class="card tile">
+      <span class="t-label">健康</span>
+      <span class="t-value"><b id="mHealth" class="txt">--</b></span>
+    </div>
+    <div class="card tile">
+      <span class="t-label">循环次数</span>
+      <span class="t-value"><b id="mCycle">--</b><i>次</i></span>
+    </div>
+    <div class="card tile">
+      <span class="t-label">充入电量</span>
+      <span class="t-value"><b id="mCounter">--</b><i>mAh</i></span>
+    </div>
+  </section>
+
+  <!-- -------------------------------------------------- 模块温度窗口 --- -->
+  <section class="card">
+    <div class="card-head">
+      <h2>全速充电温度窗口</h2>
+      <span class="hint" id="windowHint">—</span>
+    </div>
+    <div class="window-bar">
+      <div class="window-range" id="windowRange"></div>
+      <div class="window-marker" id="windowMarker"><span id="windowMarkerText">—</span></div>
+    </div>
+    <div class="window-axis">
+      <span id="axisLow">—</span>
+      <span id="axisHigh">—</span>
+    </div>
+    <p class="fine">
+      这是 <code>config.conf</code> 里的目标值，由模块刷写 <code>dtbo</code> 时写入。
+      窗口内的实际功率还受充电器、线材、SoC 温度等限制。
+    </p>
+  </section>
+
+  <!-- ------------------------------------------------------------ 曲线 --- -->
+  <section class="card">
+    <div class="card-head">
+      <h2>实时曲线</h2>
+      <span class="hint" id="chartHint">—</span>
+    </div>
+    <div class="chart-box">
+      <div class="chart-title">功率 <b id="chartPowerNow">--</b> W</div>
+      <canvas id="chartPower" height="72"></canvas>
+    </div>
+    <div class="chart-box">
+      <div class="chart-title">温度 <b id="chartTempNow">--</b> ℃</div>
+      <canvas id="chartTemp" height="72"></canvas>
+    </div>
+  </section>
+
+  <!-- ---------------------------------------------------------- 温度区 --- -->
+  <section class="card" id="thermalCard">
+    <div class="card-head">
+      <h2>相关温度区</h2>
+      <span class="hint" id="thermalHint">—</span>
+    </div>
+    <ul class="thermal-list" id="thermalList"></ul>
+  </section>
+
+  <!-- ---------------------------------------------------------- 模块态 --- -->
+  <section class="card">
+    <div class="card-head">
+      <h2>模块状态</h2>
+      <span class="chip small" id="moduleChip">—</span>
+    </div>
+    <dl class="kvlist">
+      <div><dt>上次刷写</dt><dd id="kLastFlash">—</dd></div>
+      <div><dt>写入分区</dt><dd id="kPart">—</dd></div>
+      <div><dt>镜像 SH</dt><dd id="kSha" class="mono">—</dd></div>
+      <div><dt>备份</dt><dd id="kBackup">—</dd></div>
+      <div><dt>演练模式</dt><dd id="kDryRun">—</dd></div>
+    </dl>
+  </section>
+
+  <!-- -------------------------------------------------------- 原始数据 --- -->
+  <section class="card">
+    <details>
+      <summary>原始采集数据</summary>
+      <pre id="rawDump" class="raw">—</pre>
+    </details>
+  </section>
+
+</main>
+
+<footer>
+  <p>本页面<strong>只读</strong>：仅读取 <code>/sys</code>、<code>/proc</code> 与模块自身的状态文件，不会修改任何分区或配置。</p>
+  <p class="dim">数据每 2 秒采集一次；切到后台时自动暂停。</p>
+</footer>
+
+<script src="app.js"></script>
+</body>
+</html>

@@ -9,8 +9,11 @@ FAKEPART="$2"
 DTC="$3"
 SANDBOX="$4"
 
-# 先跑安装阶段
-sh "$MODDIR/tools/test_install.sh" "$MODDIR" "$FAKEPART" "$DTC" "$SANDBOX" >/dev/null 2>&1
+# 先跑安装阶段。
+# 注意用本脚本自己的目录找 test_install.sh —— 测试脚本属于仓库，
+# 不该要求被测模块目录里也带着 tools/（这样也能直接拿打包产物来测）。
+MYDIR=$(dirname "$0")
+sh "$MYDIR/test_install.sh" "$MODDIR" "$FAKEPART" "$DTC" "$SANDBOX" >/dev/null 2>&1
 if [ $? -ne 0 ]; then
 	echo "[FAIL] 安装阶段测试未通过，先看 test_install.sh 的输出"
 	exit 1
