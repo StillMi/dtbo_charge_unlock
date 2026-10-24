@@ -386,7 +386,7 @@ python tools/webui_scenarios.py . build/wsc "<浏览器路径>" build/monitor_sa
 | `test_module.sh` | DTBO 表（3 条目 / 单条目 / 混合板型 / **大端+紧凑布局**）、裸 DTB 单段与双段、已刷过跳过、只换档位会重刷、演练模式、A/B 与单分区槽位 |
 | `test_monitor.sh` | WebUI 采集脚本：电池/电源/温度区字段、模块状态四态、无电池节点时降级、`--full` 时的分区头部比对 |
 | `test_key.sh` | 音量键解析（按下/抬起/无关事件/多行）与 `tier_pick` 各分支：音量下→48、音量上→56、不按、`FORCE_TIER` 合法/乱填、`TIER_PROMPT=0` |
-| `test_tier.sh` | 逐个档位跑完整安装，再把刷好的分区拆出来反编译，确认 `ffc_temp_high = <0x30>/<0x38>` 与 JEITA 高温边界真的是 48/56，且安全档里不残留 `0x38` |
+| `test_tier.sh` | 逐个档位跑完整安装，再把刷好的分区拆出来反编译，确认 `ffc_temp_high = <0x30>/<0x38>` 与 JEITA 高温边界真的是 48/56，**并确认另一个档位的取值没有残留**（防止只改了一半） |
 
 辅助脚本：
 

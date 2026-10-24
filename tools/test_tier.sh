@@ -101,10 +101,25 @@ check_tier() {  # check_tier <TEST_TIER 值|空> <期望℃> <期望十六进制
 		FAILED=$((FAILED + 1))
 	fi
 
-	# 3) 另一个档位的值不该同时存在（防止「改了但没生效」）
+	# 3) 另一个档位的取值不该残留（防止「只改了一半」）
 	if [ "$_want" = "48" ]; then
-		grep -qhF 'ffc_temp_high = <0x38>' "$ROOT"/tier_${_tag}_dts/*.dts 2>/dev/null \
-			&& { echo "  [FAIL] 仍存在极限档的 0x38"; FAILED=$((FAILED + 1)); }
+		_other_hex=0x38; _other_temp=56
+	else
+		_other_hex=0x30; _other_temp=48
+	fi
+	_res=0
+	if grep -qhF "ffc_temp_high = <$_other_hex>" "$ROOT"/tier_${_tag}_dts/*.dts 2>/dev/null; then
+		echo "  [FAIL] 仍存在另一个档位的 ffc_temp_high = <$_other_hex>"
+		_res=1
+		FAILED=$((FAILED + 1))
+	fi
+	if grep -qhF "\"18\", \"$_other_temp\"," "$ROOT"/tier_${_tag}_dts/*.dts 2>/dev/null; then
+		echo "  [FAIL] JEITA 里仍残留另一个档位的 \"18\", \"$_other_temp\","
+		_res=1
+		FAILED=$((FAILED + 1))
+	fi
+	if [ "$_res" -eq 0 ]; then
+		echo "  [ OK ] 没有残留另一个档位的取值（<$_other_hex> / \"18\", \"$_other_temp\",）"
 	fi
 	echo ""
 }
