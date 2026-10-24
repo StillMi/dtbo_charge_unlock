@@ -16,6 +16,8 @@ import sys
 STUB = """<script>
 (function () {
   var BASE = %s;
+  var LOGS = %s;
+  var SESS = %s;
   var n = 0;
 
   function variant(txt, i) {
@@ -27,6 +29,13 @@ STUB = """<script>
               .replace(/^temp_raw=.*$/m, 'temp_raw=' + temp)
               .replace(/^current_now=.*$/m, 'current_now=' + cur)
               .replace(/^voltage_now=.*$/m, 'voltage_now=' + vol);
+  }
+
+  /* 按命令分派：列表 / 单个会话 / 实时采集 */
+  function fixture(cmd, i) {
+    if (cmd.indexOf('--logs') >= 0) return LOGS;
+    if (cmd.indexOf('--log ') >= 0) return SESS;
+    return variant(BASE, i);
   }
 
   window.__errors = [];
@@ -41,7 +50,7 @@ STUB = """<script>
       var i = n++;
       window.__calls.push(cmd);
       setTimeout(function () {
-        try { window[cb](0, variant(BASE, i), ''); }
+        try { window[cb](0, fixture(cmd, i), ''); }
         catch (e) { window.__errors.push('callback: ' + e); }
       }, 25);
     },
@@ -152,16 +161,32 @@ font:11px/1.55 monospace;white-space:pre-wrap">check 未运行</pre>
     chk('原始数据已填', txt('rawDump').indexOf('capacity=') >= 0,
         (txt('rawDump').split('\\n').length) + ' 行');
 
+    /* ---- 充电日志标签页 ---- */
+    var L = window.__log || {};
+    chk('标签页有两个', L.tabs === 2, 'tabs=' + L.tabs);
+    chk('切到充电日志', L.switched === true, 'switched=' + L.switched);
+    chk('日志状态已填', /记录中|未记录/.test(L.chip || ''), L.chip);
+    chk('日志采样间隔已填', /^\\d+$/.test(L.intv || ''), L.intv);
+    chk('记录中不显示启动按钮', L.startHidden === true, 'hidden=' + L.startHidden);
+    chk('日志列表有行', (L.rows || 0) >= 2, 'rows=' + L.rows);
+    chk('打开会话', L.opened === true && L.title !== '—', L.title);
+    chk('会话统计已填', (L.stats || 0) >= 8, 'rows=' + L.stats);
+    chk('会话曲线已绘制', (L.painted || 0) > 100, 'pixels=' + L.painted);
+    chk('会话峰值已填', /^\\d/.test(L.peaks || ''), L.peaks);
+    chk('返回列表', L.back === true, 'back=' + L.back);
+
     var doc = document.documentElement;
     chk('无横向溢出', doc.scrollWidth <= window.innerWidth + 1,
         'scrollWidth=' + doc.scrollWidth + ' innerWidth=' + window.innerWidth);
 
     var cards = document.querySelectorAll('.card');
-    var zero = 0;
+    var zero = 0, vis = 0;
     for (var i = 0; i < cards.length; i++) {
+      if (cards[i].closest('.hidden')) continue;   /* 隐藏标签页里的卡片不算 */
+      vis++;
       if (cards[i].getBoundingClientRect().height < 12) zero++;
     }
-    chk('卡片都有高度', zero === 0, cards.length + ' 张，' + zero + ' 张异常');
+    chk('卡片都有高度', zero === 0, vis + ' 张可见，' + zero + ' 张异常');
 
     var fail = 0;
     for (var j = 0; j < r.length; j++) { if (r[j].indexOf('FAIL') === 0) fail++; }
@@ -204,6 +229,132 @@ APPLY = """<script>
 </script>
 """
 
+# 充电日志标签页：切过去 → 列表 → 打开一个会话 → 返回列表 → 切回实时
+TABS = """<script>
+(function () {
+  var L = window.__log = { tabs: 0, switched: false, chip: '', rows: 0,
+                           opened: false, title: '', stats: 0, painted: 0,
+                           peaks: '', back: false, done: false,
+                           intv: '', startHidden: false };
+
+  function txt(id) {
+    var e = document.getElementById(id);
+    return e ? (e.textContent || '').trim() : '';
+  }
+  function hidden(id) {
+    var e = document.getElementById(id);
+    return !e || e.className.indexOf('hidden') >= 0;
+  }
+  function painted(c) {
+    if (!c) return -1;
+    try {
+      var d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+      var n = 0;
+      for (var i = 3; i < d.length; i += 4) { if (d[i] > 0) n++; }
+      return n;
+    } catch (e) { return -1; }
+  }
+
+  function step1() {
+    var btns = document.querySelectorAll('[data-tab]');
+    L.tabs = btns.length;
+    var logsBtn = null, liveBtn = null;
+    for (var i = 0; i < btns.length; i++) {
+      var t = btns[i].getAttribute('data-tab');
+      if (t === 'logs') logsBtn = btns[i];
+      if (t === 'live') liveBtn = btns[i];
+    }
+    L.hasLive = !!liveBtn;
+    if (!logsBtn) return;
+    logsBtn.click();
+
+    setTimeout(function () {
+      L.switched = !hidden('viewLogs') && hidden('viewLive');
+      L.chip = txt('logStateChip');
+      L.intv = txt('logInterval');
+      L.startHidden = hidden('logStartBox');
+      var ul = document.getElementById('logList');
+      L.rows = ul ? ul.children.length : 0;
+
+      var first = ul && ul.children[0];
+      if (!first || first.className === 'empty') return;
+      first.click();
+
+      setTimeout(function () {
+        L.opened = !hidden('logDetail');
+        L.title = txt('logTitle');
+        var st = document.getElementById('logStats');
+        L.stats = st ? st.children.length : 0;
+        L.painted = painted(document.getElementById('logChartPower'));
+        L.peaks = txt('logPowerPeak') + '/' + txt('logTempPeak');
+
+        document.getElementById('btnLogBack').click();
+
+        setTimeout(function () {
+          L.back = hidden('logDetail');
+          if (liveBtn) liveBtn.click();
+          setTimeout(function () { L.done = true; }, 300);
+        }, 500);
+      }, 600);
+    }, 700);
+  }
+
+  setTimeout(step1, 6500);
+})();
+</script>
+"""
+
+
+def fake_fixtures(now):
+    """造两份假数据：monitor.sh --logs 的会话列表、--log 的采样点。"""
+    import time as _t
+
+    specs = [
+        (now - 3 * 86400, now - 3 * 86400 + 3900, 0, 78, 31, 58, 342),
+        (now - 2 * 86400, now - 2 * 86400 + 5400, 0, 108, 22, 74, 361),
+        (now - 7200,      None,                   0, 24, 55, 64, 348),
+    ]
+
+    def name_of(st):
+        return _t.strftime("%Y%m%d-%H%M%S", _t.localtime(st)) + ".log"
+
+    rows = ["log_dir=/data/adb/dtbo_charge_unlock/chargelog",
+            "log_interval=30",
+            "log_count=%d" % len(specs),
+            "log_current=" + name_of(specs[2][0]),
+            "log_running=1"]
+    for i, (st, en, ab, sm, c0, c1, tmax) in enumerate(specs):
+        rows += [
+            "log.%d.name=%s" % (i, name_of(st)),
+            "log.%d.start=%d" % (i, st),
+            "log.%d.end=%s" % (i, "" if en is None else en),
+            "log.%d.aborted=%d" % (i, ab),
+            "log.%d.samples=%d" % (i, sm),
+            "log.%d.cap0=%d" % (i, c0),
+            "log.%d.cap1=%d" % (i, c1),
+            "log.%d.temp_max=%d" % (i, tmax),
+        ]
+    rows.append("log.list_count=%d" % len(specs))
+
+    st, en, ab, sm, c0, c1, tmax = specs[0]
+    pts = 60
+    srows = ["session.name=" + name_of(st),
+             "session.start=%d" % st,
+             "session.end=%d" % en,
+             "session.aborted=%d" % ab]
+    for i in range(pts):
+        frac = i / float(pts - 1)
+        cap = int(round(c0 + (c1 - c0) * frac))
+        temp = int(round(310 + 40 * frac + 9 * abs((i % 10) - 5)))
+        cur = int(round(2400000 + 900000 * (0.5 + 0.5 * ((i * 7) % 13) / 12.0)))
+        volt = int(round(4050000 + 120000 * frac))
+        cnt = int(round(2600000 + 1500000 * frac))
+        srows.append("session.s.%d=%d,%d,%d,%d,%d,%d,Charging"
+                     % (i, st + i * 30, cap, temp, cur, volt, cnt))
+    srows.append("session.count=%d" % pts)
+
+    return "\n".join(rows) + "\n", "\n".join(srows) + "\n"
+
 
 def main():
     if len(sys.argv) < 4:
@@ -219,19 +370,23 @@ def main():
     with open(monfile, encoding="utf-8") as fh:
         base = fh.read()
 
+    import time as _t
+    logs, sess = fake_fixtures(int(_t.time()))
+
     index = os.path.join(outdir, "index.html")
     with open(index, encoding="utf-8") as fh:
         html = fh.read()
 
     html = html.replace('<script src="app.js"></script>',
-                        STUB % json.dumps(base) +
-                        '<script src="app.js"></script>' + ERRBOX + APPLY)
+                        STUB % (json.dumps(base), json.dumps(logs), json.dumps(sess)) +
+                        '<script src="app.js"></script>' + ERRBOX + APPLY + TABS)
 
     with open(index, "w", encoding="utf-8", newline="\n") as fh:
         fh.write(html)
 
     print("harness: %s" % index)
     print("  注入 monitor 输出 %d 字节" % len(base))
+    print("  注入日志假数据 %d / 会话 %d 字节" % (len(logs), len(sess)))
     return 0
 
 

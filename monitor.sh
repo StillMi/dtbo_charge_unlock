@@ -150,6 +150,77 @@ emit cfg_ffc_low       "$_cfg_low"
 emit cfg_ffc_high      "$_cfg_high"
 emit cfg_dry_run       "$(kv "$MODDIR/config.conf" DRY_RUN)"
 
+# ------------------------------------------------------------ 充电日志 ---
+# 日志放在模块目录之外，升级模块不会丢历史。
+LOGDIR="${CHARGELOG_DIR:-$(kv "$MODDIR/config.conf" CHARGELOG_DIR)}"
+[ -n "$LOGDIR" ] || LOGDIR=/data/adb/dtbo_charge_unlock/chargelog
+
+_interval=$(kv "$MODDIR/config.conf" CHARGELOG_INTERVAL)
+case "$_interval" in ''|*[!0-9]*) _interval=30 ;; esac
+emit log_dir      "$LOGDIR"
+emit log_interval "$_interval"
+emit log_count    "$(ls -1 "$LOGDIR"/*.log 2>/dev/null | wc -l | tr -d ' \t\r\n')"
+emit log_current  "$(rd "$LOGDIR/.current")"
+
+if [ -f "$LOGDIR/.pid" ] && kill -0 "$(cat "$LOGDIR/.pid" 2>/dev/null)" 2>/dev/null; then
+	emit log_running 1
+else
+	emit log_running 0
+fi
+
+# 会话列表：只输出元信息，统计量留给页面算，省得在设备上 fork 一堆 awk
+list_sessions() {
+	_i=0
+	for _f in $(ls -1t "$LOGDIR"/*.log 2>/dev/null); do
+		[ -f "$_f" ] || continue
+		[ "$_i" -ge 40 ] && break
+		_n=${_f##*/}
+		emit "log.$_i.name"    "$_n"
+		emit "log.$_i.start"   "$(sed -n 's/^#start=//p' "$_f" 2>/dev/null | head -n 1)"
+		emit "log.$_i.end"     "$(sed -n 's/^#end=//p' "$_f" 2>/dev/null | head -n 1)"
+		emit "log.$_i.aborted" "$(grep -c '^#aborted=1' "$_f" 2>/dev/null)"
+		emit "log.$_i.samples" "$(grep -vc '^#' "$_f" 2>/dev/null)"
+		emit "log.$_i.cap0"    "$(grep -v '^#' "$_f" 2>/dev/null | head -n 1 | cut -d, -f2)"
+		emit "log.$_i.cap1"    "$(grep -v '^#' "$_f" 2>/dev/null | tail -n 1 | cut -d, -f2)"
+		emit "log.$_i.temp_max" "$(grep -v '^#' "$_f" 2>/dev/null | cut -d, -f3 | sort -n | tail -n 1)"
+		_i=$((_i + 1))
+	done
+	emit log.list_count "$_i"
+}
+
+# 单个会话的采样点。每行原样带出去，单位换算交给页面。
+dump_session() {
+	_name="$2"
+	case "$_name" in
+		''|*/*|*..*) emit log_err "会话名不合法"; exit 1 ;;
+	esac
+	_f="$LOGDIR/$_name"
+	if [ ! -r "$_f" ]; then
+		emit log_err "找不到会话 $2"
+		exit 1
+	fi
+	emit session.name    "$_name"
+	emit session.start   "$(sed -n 's/^#start=//p' "$_f" 2>/dev/null | head -n 1)"
+	emit session.end     "$(sed -n 's/^#end=//p' "$_f" 2>/dev/null | head -n 1)"
+	emit session.aborted "$(grep -c '^#aborted=1' "$_f" 2>/dev/null)"
+	_i=0
+	while IFS= read -r _l; do
+		case "$_l" in
+			'#'*) continue ;;
+			'') continue ;;
+		esac
+		emit "session.s.$_i" "$_l"
+		_i=$((_i + 1))
+		[ "$_i" -ge 4000 ] && break
+	done < "$_f"
+	emit session.count "$_i"
+}
+
+case "${1:-}" in
+	--logs) list_sessions ;;
+	--log)  dump_session "$@" ;;
+esac
+
 # 档位名由温度窗口反推 —— config.conf 是唯一事实来源，
 # 不额外记状态文件，避免两边对不上。
 case "$_cfg_high" in

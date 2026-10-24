@@ -29,7 +29,12 @@
 
 <div id="banner" class="banner hidden"></div>
 
-<main>
+<nav class="tabs" id="tabs">
+  <button class="tab on" type="button" data-tab="live">实时</button>
+  <button class="tab" type="button" data-tab="logs">充电日志</button>
+</nav>
+
+<main id="viewLive">
 
   <!-- ---------------------------------------------------------- 主状态 --- -->
   <section class="card hero">
@@ -161,10 +166,52 @@
 
 </main>
 
+<!-- ============================================================ 充电日志 --- -->
+<main id="viewLogs" class="hidden">
+
+  <section class="card" id="logListCard">
+    <div class="card-head">
+      <h2>充电日志</h2>
+      <span class="chip small" id="logStateChip">—</span>
+    </div>
+    <p class="fine" id="logHint">
+      <span id="logHintText">插上充电器自动开始记录，拔出结束。</span>
+      每 <span id="logInterval">—</span> 秒采一次，日志存在模块目录之外，
+      升级模块不会丢。
+    </p>
+    <div class="apply-box" id="logStartBox">
+      <button id="btnLogStart" type="button">启动记录</button>
+      <p class="fine">
+        后台记录进程没有在跑（可能是开机时启动失败，或者被系统清掉了）。
+        点一下就能拉起来，不会写任何分区。
+      </p>
+    </div>
+    <ul class="loglist" id="logList"></ul>
+  </section>
+
+  <section class="card hidden" id="logDetail">
+    <div class="card-head">
+      <h2 id="logTitle">—</h2>
+      <button class="linkbtn" id="btnLogBack" type="button">返回列表</button>
+    </div>
+    <dl class="kvlist" id="logStats"></dl>
+    <div class="chart-box">
+      <div class="chart-title">功率（峰值 <b id="logPowerPeak">--</b> W）</div>
+      <canvas id="logChartPower" height="72"></canvas>
+    </div>
+    <div class="chart-box">
+      <div class="chart-title">电池温度（最高 <b id="logTempPeak">--</b> ℃）</div>
+      <canvas id="logChartTemp" height="72"></canvas>
+    </div>
+  </section>
+
+</main>
+
 <footer>
   <p>页面<strong>只读取</strong> <code>/sys</code>、<code>/proc</code> 与模块状态文件。
-  唯一的写操作是「运行修改」按钮 —— 需要二次确认，执行的是模块自带的
-  <code>action.sh</code>（刷写前自动备份、刷后回读校验）。</p>
+  唯一的<strong>分区写操作</strong>是「运行修改」按钮 —— 需要二次确认，执行的是模块自带的
+  <code>action.sh</code>（刷写前自动备份、刷后回读校验）。
+  充电日志是另一个后台进程在记，只往日志目录写文本，不碰分区。</p>
   <p class="dim">数据每 2 秒采集一次；切到后台时自动暂停。</p>
 </footer>
 

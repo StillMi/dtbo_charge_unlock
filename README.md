@@ -60,6 +60,9 @@
 * 把 `mca_charger_thermal` 节点置为 `status = "disabled"`，不再因整机温度限制充电功率；
 * 只动有线充电相关节点，无线充电、电池模型等节点保持原样。
 
+另外带一个 WebUI：**实时**标签页看当前充电状态，**充电日志**标签页回看
+每一次「插上 → 拔掉」的功率/温度曲线（由后台进程自动记录）。
+
 ---
 
 ## 一、它是怎么做的
@@ -111,7 +114,7 @@
 ## 二、安装与使用
 
 1. **先按上面那节把 Scene 温控改成「丧心病狂」**，否则装了也不一定有效。
-2. 用 KernelSU（或 Magisk）安装 `dtbo_charge_unlock-v1.7.0.zip`。
+2. 用 KernelSU（或 Magisk）安装 `dtbo_charge_unlock-v1.8.0.zip`。
    **安装过程中就会刷写**，安装界面能看到完整过程与结果。
 3. 安装过程中会让你选档位（见下），选完继续。
 4. 安装完成 → 重启手机 → 新 `dtbo` 生效。
@@ -191,6 +194,32 @@ WebUI 会帮你判断：状态显示 **需重新应用**、「分区一致」显
 温度窗口那条只是「目标值」，实际充电功率还受充电器、线材、SoC 温度等影响，
 页面不会把这些混为一谈。
 
+### 充电日志（WebUI 的第二个标签页）
+
+页面顶部有 **「实时」/「充电日志」** 两个标签页。切到「充电日志」可以看到
+每一次**插上充电器到拔掉充电器**的完整记录：
+
+* 时间、时长、起止电量
+* 期间最高温度、最高功率
+* 采样点数；中途异常中断（例如重启）会标 **未正常结束**
+
+点任意一条进去，会画出这次充电的**功率曲线和温度曲线**，并给出统计：
+时长、起止电量、最高功率、最高温度、平均功率、充入电量（mAh）、采样间隔。
+
+记录由**后台常驻进程**完成，不需要网页开着：
+
+* 开机后期由 `service.sh` 拉起 `chargelog.sh`，用 `setsid` 脱离，
+  每 `CHARGELOG_INTERVAL` 秒采一个点；
+* 检测到「任一供电源 online」就开始一个新会话，全部断开就收尾；
+* 一个充电会话一个文本文件，放在 **模块目录之外**
+  （默认 `/data/adb/dtbo_charge_unlock/chargelog/`），这样升级/重装模块
+  不会把历史记录冲掉；
+* 超出 `CHARGELOG_MAX` 条时自动淘汰最旧的；
+* 卸载模块时，日志会先复制到 `/sdcard/Download/dtbo_charge_unlock_backup/chargelog/`。
+
+它只往自己的日志目录**追加文本**，不碰分区、不改配置。想在页面里立刻开始
+记录（比如开机时进程没起来），点 **「启动记录」** 即可。
+
 ## 三、安全机制
 
 | 机制 | 说明 |
@@ -243,6 +272,10 @@ fastboot flash dtbo backup/dtbo_a_YYYYmmdd-HHMMSS.img
 | `DRY_RUN` | `0` | `1` = 只解包/改写/打包/校验，不写分区 |
 | `FORCE_SLOT` | 空 | 强制槽位 `a` / `b`；留空自动识别 |
 | `ABORT_ON_INSTALL_FAIL` | `0` | `1` = 安装阶段刷写失败时直接中止安装 |
+| `CHARGELOG` | `1` | `1` = 开机时拉起充电日志后台进程；`0` = 关闭 |
+| `CHARGELOG_INTERVAL` | `30` | 采样间隔（秒），最小 5 |
+| `CHARGELOG_MAX` | `40` | 最多保留多少个充电会话，超出淘汰最旧的 |
+| `CHARGELOG_DIR` | 空 | 日志目录；留空 = `/data/adb/dtbo_charge_unlock/chargelog`（模块目录之外） |
 
 ## 五、目录结构
 
@@ -253,12 +286,13 @@ dtbo_charge_unlock/
 ├── config.conf           用户配置
 ├── common.sh             核心逻辑（槽位/分区/改写/校验/刷写）
 ├── post-fs-data.sh       开机早期：确认/回滚（不刷写）
-├── service.sh            开机后期：确认「新 dtbo 能正常开机」
+├── service.sh            开机后期：确认「新 dtbo 能正常开机」+ 拉起充电日志
+├── chargelog.sh          充电日志后台进程（插入→拔出，一段会话一个文本）
 ├── action.sh             KernelSU「操作」按钮 / 手动执行
 ├── restore.sh            手工回滚
 ├── dump.sh               只读导出：拆出每个 DTB 存成 .dtb/.dts，并生成参数汇总
-├── monitor.sh            只读采集充电状态（WebUI 用，输出 key=value）
-├── uninstall.sh          卸载时把备份留存到 /sdcard/Download（不改分区）
+├── monitor.sh            只读采集充电状态 / 列出与导出充电日志（WebUI 用）
+├── uninstall.sh          卸载时把备份和充电日志留存到 /sdcard/Download（不改分区）
 ├── bin/dtc-aarch64       静态链接的 aarch64 dtc 1.8.1
 ├── webroot/              WebUI 页面（KernelSU 从这里加载）
 │   ├── index.html        页面入口
@@ -270,7 +304,8 @@ dtbo_charge_unlock/
 │   └── expect/*.txt      校验用的期望属性行
 ├── state/                运行状态（刷写哈希、pending 标记等）
 ├── backup/               原始分区备份
-└── logs/                 日志（安装阶段单独一份 install-*.log）
+├── logs/                 日志（安装阶段单独一份 install-*.log）
+└── （模块外）/data/adb/dtbo_charge_unlock/chargelog/   充电日志（升级不清空）
 ```
 
 ## 六、改写了哪些节点
@@ -310,6 +345,9 @@ dtbo_charge_unlock/
   上限仍然是**充电 IC 自己的硬件保护**，那部分改不掉也不该改。
 * 刷入后 `dtbo` 的 sha256 会变；如果系统开启了 dm-verity / AVB 严格校验，
   可能影响 OTA，恢复原镜像即可。
+* 充电日志是**独立后台进程**，默认 30 秒一个点，因此曲线比较粗；
+  它靠「供电源 online」判断插拔，重启会中断当前会话（会标 **未正常结束**），
+  不会恢复。日志只在模块自己开启时记录，卸载后不再产生。
 
 ## 八、开发与自测（PC 端）
 
@@ -344,12 +382,15 @@ sh tools/test_tier.sh    . build/part_dtbo.img /path/to/dtc build/tier
 # 2d) WebUI 采集脚本自测（造一棵假 sysfs，检查每个输出字段）
 sh tools/test_monitor.sh   . build/sb_mon
 
+# 2e) 充电日志进程自测（假 sysfs，模拟插拔、中断、淘汰）
+sh tools/test_chargelog.sh . build/sb_clog
+
 # 3) 重新生成改写规则（换了参考 dts 才需要）
 python tools/gen_ref.py  <参考.dts> ref
 python tools/gen_sed.py  ref/patch.list ref
 
 # 4) 打包（内置编码检查，有 CRLF / BOM 会直接拒绝）
-python tools/package.py  . dist/dtbo_charge_unlock-v1.7.0.zip
+python tools/package.py  . dist/dtbo_charge_unlock-v1.8.0.zip
 ```
 
 WebUI 的页面逻辑也可以在 PC 上验证，不需要设备。做法是造一个假的 `ksu`
@@ -367,12 +408,14 @@ python tools/mkwebui_harness.py . build/webui build/monitor_sample.txt
 <浏览器> --headless=new --virtual-time-budget=24000 \
          --dump-dom "file:///<绝对路径>/build/webui/index.html" > build/dom.html
 
-# 7) 状态分支：充电中 / 放电 / 已充满 / 过热越界 / 低于下限 / 已停用 / 无电池节点
+# 7) 状态分支：充电中 / 放电 / 已充满 / 过热越界 / 低于下限 / 已停用 /
+#    OTA 后需重新应用 / 无电池节点（共 9 个场景）
 python tools/webui_scenarios.py . build/wsc "<浏览器路径>" build/monitor_sample.txt
 ```
 
 页面里的断言会检查：有没有 JS 异常、各字段是否真的填上了数值、
 电量环是否绘制、两条曲线是否有像素、温度标记是否越界变红、
+两个标签页能不能切换、充电日志列表/会话详情/曲线是否都画出来了、
 以及有没有横向溢出。这样 UI 改动不必靠肉眼确认。
 
 | 测试 | 覆盖内容 |
@@ -384,7 +427,8 @@ python tools/webui_scenarios.py . build/wsc "<浏览器路径>" build/monitor_sa
 | `test_rollback.sh` | 连续 3 次开机未确认 → 自动回滚 → 写 `halted` → 后续跳过 |
 | `test_edge.sh` | 令牌匹配/不匹配、同一次开机内刷写不计数、校验器正反两向、`FORCE_SLOT` |
 | `test_module.sh` | DTBO 表（3 条目 / 单条目 / 混合板型 / **大端+紧凑布局**）、裸 DTB 单段与双段、已刷过跳过、只换档位会重刷、演练模式、A/B 与单分区槽位 |
-| `test_monitor.sh` | WebUI 采集脚本：电池/电源/温度区字段、模块状态四态、无电池节点时降级、`--full` 时的分区头部比对 |
+| `test_monitor.sh` | WebUI 采集脚本：电池/电源/温度区字段、模块状态四态、无电池节点时降级、`--full` 时的分区头部比对、充电日志的 `log_*` 字段 |
+| `test_chargelog.sh` | 充电日志后台进程：没插电不建会话、插电建会话、7 个字段、继续采样、拔出收尾、`status` 兜底、异常中断补 `#aborted`、重复启动、`CHARGELOG=0` 关闭、`monitor.sh --logs/--log` 输出、路径穿越被拒、超出 `CHARGELOG_MAX` 淘汰最旧 |
 | `test_key.sh` | 音量键解析（按下/抬起/无关事件/多行）与 `tier_pick` 各分支：音量下→48、音量上→56、不按、`FORCE_TIER` 合法/乱填、`TIER_PROMPT=0` |
 | `test_tier.sh` | 逐个档位跑完整安装，再把刷好的分区拆出来反编译，确认 `ffc_temp_high = <0x30>/<0x38>` 与 JEITA 高温边界真的是 48/56，**并确认另一个档位的取值没有残留**（防止只改了一半） |
 

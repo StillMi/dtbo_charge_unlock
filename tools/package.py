@@ -20,6 +20,7 @@ INCLUDE_FILES = [
     "restore.sh",
     "dump.sh",
     "monitor.sh",
+    "chargelog.sh",
     "uninstall.sh",
     "config.conf",
     "README.md",
@@ -36,7 +37,8 @@ INCLUDE_DIRS = [
 # 需要可执行权限的文件
 EXEC_FILES = {
     "customize.sh", "post-fs-data.sh", "service.sh", "action.sh",
-    "restore.sh", "dump.sh", "monitor.sh", "uninstall.sh", "bin/dtc-aarch64",
+    "restore.sh", "dump.sh", "monitor.sh", "chargelog.sh", "uninstall.sh",
+    "bin/dtc-aarch64",
 }
 
 

@@ -1,7 +1,10 @@
 #!/system/bin/sh
-# 开机后期确认：如果本轮开机加载的是「上一次刷入的 dtbo」，
-# 并且已经走到开机后期（说明没有卡在启动阶段），就记为已确认。
+# 开机后期：
+#   1. 启动充电日志后台记录（独立进程，只读 sysfs，不碰分区）
+#   2. 确认刷入的 dtbo 能正常开机
 #
+# 关于确认：如果本轮开机加载的是「上一次刷入的 dtbo」，并且已经走到开机后期
+# （说明没有卡在启动阶段），就记为已确认。
 # 这个标记只是提前确认；即使本脚本没跑，下次开机也不会误回滚——
 # 只有「连续 3 次开机都没走到开机后期」才会回滚。
 
@@ -11,6 +14,10 @@ MODDIR="${0%/*}"
 STATE="$MODDIR/state"
 LOGDIR="$MODDIR/logs"
 mkdir -p "$STATE" "$LOGDIR" 2>/dev/null
+
+# ---- 充电日志 ----
+# 必须放在下面的提前 return 之前，否则没刷写过 dtbo 的设备永远不会开始记录。
+[ -f "$MODDIR/chargelog.sh" ] && sh "$MODDIR/chargelog.sh" start >/dev/null 2>&1
 
 [ -f "$STATE/pending" ] || exit 0
 

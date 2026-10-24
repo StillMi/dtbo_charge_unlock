@@ -3,8 +3,8 @@
 # 安装脚本：在安装过程中就直接完成「识别槽位 → 提取 dtbo → 解包 → 改写 →
 # 打包 → 复核 → 备份 → 刷入 → 回读校验」，装完重启即可生效。
 #
-# 开机阶段（post-fs-data.sh）只在「检测到 dtbo 被换过」时才重新执行，
-# 例如系统 OTA 之后，用来自动重新应用。
+# 开机阶段（post-fs-data.sh）**不写任何分区**，只做确认 / 计数 / 必要时回滚。
+# 系统 OTA 之后需要用户手动触发一次（KernelSU「操作」或 WebUI「运行修改」）。
 # ============================================================================
 
 SKIPUNZIP=0
@@ -18,6 +18,7 @@ set_perm "$MODPATH/action.sh" 0 0 0755
 set_perm "$MODPATH/restore.sh" 0 0 0755
 set_perm "$MODPATH/dump.sh" 0 0 0755
 set_perm "$MODPATH/monitor.sh" 0 0 0755
+set_perm "$MODPATH/chargelog.sh" 0 0 0755
 set_perm "$MODPATH/uninstall.sh" 0 0 0755
 
 mkdir -p "$MODPATH/state" "$MODPATH/backup" "$MODPATH/logs"
@@ -41,8 +42,12 @@ ui_print "=============================================="
 ui_print " DTBO 有线充电限制解锁 — 安装阶段执行"
 ui_print "=============================================="
 
+# 升级安装时，旧版本的充电日志后台进程可能还在跑（它读的脚本文件已被替换），
+# 先停掉，安装结束后再按新版本重新拉起。
+[ -f "$MODPATH/chargelog.sh" ] && sh "$MODPATH/chargelog.sh" stop >/dev/null 2>&1
+
 # ---------------------------------------------------------------------------
-# 选档位（音量键）：结果写回 config.conf，之后开机重刷 / OTA 重应用都沿用
+# 选档位（音量键）：结果写回 config.conf，之后手动重刷沿用同一档位
 # ---------------------------------------------------------------------------
 tier_pick
 
@@ -87,3 +92,6 @@ ui_print "- 日志目录: $MODPATH/logs/"
 ui_print "- 手动重跑: su -c 'sh /data/adb/modules/dtbo_charge_unlock/action.sh'"
 ui_print "- 只读导出: su -c 'sh /data/adb/modules/dtbo_charge_unlock/dump.sh'"
 ui_print "- 手工回滚: su -c 'sh /data/adb/modules/dtbo_charge_unlock/restore.sh'"
+
+# 重新拉起充电日志后台进程（开机时 service.sh 也会拉，这里先让本次安装后就开始记）
+[ -f "$MODPATH/chargelog.sh" ] && sh "$MODPATH/chargelog.sh" start >/dev/null 2>&1

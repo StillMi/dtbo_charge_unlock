@@ -207,7 +207,7 @@ def build_harness(moddir, outdir, base, edge):
         shutil.rmtree(outdir)
     shutil.copytree(src, outdir)
 
-    index = os.path.join(outdir, "index.html")
+    index = os.path.abspath(os.path.join(outdir, "index.html"))
     with open(index, encoding="utf-8") as fh:
         html = fh.read()
     html = html.replace('<script src="app.js"></script>',
@@ -218,7 +218,7 @@ def build_harness(moddir, outdir, base, edge):
 
     url = "file:///" + index.replace("\\", "/")
     dom = os.path.join(outdir, "dom.html")
-    prof = os.path.join(outdir, "profile")
+    prof = os.path.abspath(os.path.join(outdir, "profile"))
     with open(dom, "wb") as out:
         subprocess.run(
             [edge, "--headless=new", "--disable-gpu", "--no-first-run",
@@ -238,9 +238,10 @@ def main():
         base_text = fh.read()
 
     total_fail = 0
-    for name, fn, exp in SCENARIOS:
+    for idx, (name, fn, exp) in enumerate(SCENARIOS):
         base = fn(base_text)
-        outdir = os.path.join(sandbox, "sc_" + re.sub(r"\W+", "_", name))
+        # 目录名只用 ASCII：Edge 对非 ASCII 的输出路径会直接不写文件
+        outdir = os.path.join(sandbox, "sc_%02d" % idx)
         html = build_harness(moddir, outdir, base, edge)
 
         m = re.search(r'(?s)<pre id="__check"[^>]*>(.*?)</pre>', html)

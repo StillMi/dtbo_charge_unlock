@@ -3,6 +3,9 @@
    采集是只读的（monitor.sh 只读 /sys /proc 和模块状态文件）。
    唯一的写操作是「运行修改」按钮：二次确认后执行模块自带的 action.sh，
    由它完成「解包 → 改写 → 备份 → 刷入 → 回读校验」，本页面不直接写分区。
+
+   充电日志标签页读的是 chargelog.sh 后台进程记下的文本文件（monitor.sh --logs
+   只负责列出来），页面本身不写任何日志。
    ========================================================================== */
 (function () {
   'use strict';
@@ -474,11 +477,14 @@
     setText('chartHint', series.power.length + ' 点 / ' + Math.round(POLL_MS / 1000) + 's');
   }
 
-  function drawSeries(canvas, data, color, fixedMin) {
+  function drawSeries(canvas, data, color, fixedMin, total) {
     if (!canvas) return;
     var dpr = window.devicePixelRatio || 1;
     var w = canvas.clientWidth || canvas.parentNode.clientWidth || 300;
     var h = canvas.clientHeight || 72;
+
+    var slots = total || MAX_POINTS;
+    if (slots < 2) slots = 2;
 
     if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
       canvas.width = Math.round(w * dpr);
@@ -514,8 +520,8 @@
       ctx.stroke();
     }
 
-    var stepX = w / (MAX_POINTS - 1);
-    var offset = MAX_POINTS - data.length;
+    var stepX = w / (slots - 1);
+    var offset = slots - data.length;
 
     function xAt(idx) { return (offset + idx) * stepX; }
     function yAt(v)   { return h - ((v - lo) / span) * h; }
@@ -561,6 +567,304 @@
   function redrawCharts() {
     drawSeries($('chartPower'), series.power, '#58a6ff', 0);
     drawSeries($('chartTemp'),  series.temp,  '#3fb950', null);
+  }
+
+  /* ------------------------------------------------------------ 充电日志 --- */
+
+  var logList = [];     /* monitor.sh --logs 的结果 */
+  var logCur  = null;   /* 当前打开的会话 */
+  var tab = 'live';
+
+  function durationText(a, b) {
+    if (!a || !b || b < a) return '—';
+    var s = b - a;
+    if (s < 60) return s + ' 秒';
+    if (s < 3600) return Math.floor(s / 60) + ' 分';
+    return Math.floor(s / 3600) + ' 时 ' + Math.floor((s % 3600) / 60) + ' 分';
+  }
+
+  function switchTab(name) {
+    if (name === tab) return;
+    tab = name;
+
+    $('viewLive').classList.toggle('hidden', name !== 'live');
+    $('viewLogs').classList.toggle('hidden', name !== 'logs');
+
+    var btns = document.querySelectorAll('[data-tab]');
+    for (var i = 0; i < btns.length; i++) {
+      btns[i].classList.toggle('on', btns[i].getAttribute('data-tab') === name);
+    }
+
+    if (name === 'logs') {
+      stopTimer();
+      loadLogs();
+    } else if (autoOn) {
+      refresh(true);
+      startTimer();
+    }
+  }
+
+  /* ---- 会话列表 ---- */
+
+  function renderLogState(k) {
+    var running = (k.log_running || '').trim() === '1';
+    var iv = num(k.log_interval);
+    var cur = (k.log_current || '').trim();
+
+    var chip = $('logStateChip');
+    chip.textContent = running ? '记录中' : '未记录';
+    chip.className = 'chip small ' + (running ? 'ok' : 'warn');
+
+    setText('logInterval', iv !== null ? String(iv) : '30');
+    $('logStartBox').classList.toggle('hidden', running);
+
+    if (!running) {
+      setText('logHintText', '后台记录进程没有在跑，插拔充电器不会被记下来。');
+    } else if (cur) {
+      setText('logHintText', '正在记录这次充电（' + cur + '），拔出充电器后结束。');
+    } else {
+      setText('logHintText', '等待插上充电器…');
+    }
+  }
+
+  function renderLogList() {
+    var ul = $('logList');
+    ul.innerHTML = '';
+
+    if (!logList.length) {
+      var li0 = document.createElement('li');
+      li0.className = 'empty';
+      li0.textContent = '还没有记录。插上充电器就会开始记。';
+      ul.appendChild(li0);
+      return;
+    }
+
+    for (var i = 0; i < logList.length; i++) {
+      (function (s) {
+        var li = document.createElement('li');
+
+        var main = document.createElement('div');
+        main.className = 'lt-main';
+
+        var t = document.createElement('div');
+        t.className = 'lt-time';
+        t.textContent = shortTime(s.start);
+
+        var sub = document.createElement('div');
+        sub.className = 'lt-sub';
+        var bits = [];
+        if (s.cap0 !== null && s.cap1 !== null) {
+          bits.push(Math.round(s.cap0) + '% → ' + Math.round(s.cap1) + '%');
+        }
+        if (s.tmax !== null) bits.push('最高 ' + fmt(s.tmax, 1) + '℃');
+        bits.push(s.samples + ' 点');
+        sub.textContent = bits.join(' · ');
+        if (s.aborted) {
+          var b = document.createElement('span');
+          b.className = 'bad';
+          b.textContent = ' · 未正常结束';
+          sub.appendChild(b);
+        }
+
+        main.appendChild(t);
+        main.appendChild(sub);
+
+        var dur = document.createElement('div');
+        dur.className = 'lt-dur';
+        dur.textContent = durationText(s.start, s.end);
+
+        li.appendChild(main);
+        li.appendChild(dur);
+        li.addEventListener('click', function () { openSession(s.name); });
+        ul.appendChild(li);
+      })(logList[i]);
+    }
+  }
+
+  function loadLogs() {
+    var ul = $('logList');
+    if (ul) ul.innerHTML = '<li class="empty">读取中…</li>';
+    $('logDetail').classList.add('hidden');
+    $('logListCard').classList.remove('hidden');
+
+    return exec('sh ' + moduleDir() + '/monitor.sh --logs', 30000)
+      .then(function (res) {
+        var k = parseKV(res.stdout || '');
+        var n = num(k['log.list_count']) || 0;
+
+        logList = [];
+        for (var i = 0; i < n; i++) {
+          var nm = k['log.' + i + '.name'];
+          if (!nm) continue;
+          logList.push({
+            name: nm,
+            start: num(k['log.' + i + '.start']),
+            end: num(k['log.' + i + '.end']),
+            aborted: num(k['log.' + i + '.aborted']) === 1,
+            samples: num(k['log.' + i + '.samples']) || 0,
+            cap0: num(k['log.' + i + '.cap0']),
+            cap1: num(k['log.' + i + '.cap1']),
+            tmax: tempC(k['log.' + i + '.temp_max'])
+          });
+        }
+
+        renderLogState(k);
+        renderLogList();
+      })
+      .catch(function (err) {
+        ul.innerHTML = '';
+        var li = document.createElement('li');
+        li.className = 'empty';
+        li.textContent = '读取失败：' + (err && err.message ? err.message : err);
+        ul.appendChild(li);
+      });
+  }
+
+  /* ---- 单个会话 ---- */
+
+  function renderSession(s) {
+    var pts = s.pts;
+    var pw = [], tp = [];
+    var pmax = null, tmax = null;
+    var c0 = null, c1 = null, cfirst = null, clast = null;
+
+    for (var i = 0; i < pts.length; i++) {
+      var p = pts[i];
+      pw.push(p.power);
+      tp.push(p.temp);
+      if (p.power !== null && (pmax === null || p.power > pmax)) pmax = p.power;
+      if (p.temp !== null && (tmax === null || p.temp > tmax)) tmax = p.temp;
+      if (p.cap !== null) { if (c0 === null) c0 = p.cap; c1 = p.cap; }
+      if (p.counter !== null) {
+        if (cfirst === null) cfirst = p.counter;
+        clast = p.counter;
+      }
+    }
+
+    var mah = (cfirst !== null && clast !== null && clast >= cfirst)
+      ? (clast - cfirst) / 1000 : null;
+
+    var rows = [];
+    rows.push(['开始', shortTime(s.start)]);
+    rows.push(['结束', s.end ? (clockOf(s.end) + '（' + durationText(s.start, s.end) + '）')
+                             : '记录中']);
+    if (c0 !== null && c1 !== null) rows.push(['电量', Math.round(c0) + '% → ' + Math.round(c1) + '%']);
+    if (mah !== null) rows.push(['充入', fmt(mah, 0) + ' mAh']);
+    rows.push(['功率峰值', fmt(pmax, 1) + ' W']);
+    rows.push(['温度最高', fmt(tmax, 1) + ' ℃']);
+    rows.push(['采样点', pts.length + ' 个']);
+    if (s.aborted) rows.push(['状态', '未正常结束（掉电或被系统杀掉）']);
+
+    var stats = $('logStats');
+    stats.innerHTML = '';
+    for (var r = 0; r < rows.length; r++) {
+      var dt = document.createElement('dt');
+      dt.textContent = rows[r][0];
+      var dd = document.createElement('dd');
+      dd.textContent = rows[r][1];
+      stats.appendChild(dt);
+      stats.appendChild(dd);
+    }
+
+    setText('logPowerPeak', fmt(pmax, 1));
+    setText('logTempPeak', fmt(tmax, 1));
+
+    drawSeries($('logChartPower'), pw, '#58a6ff', 0, Math.max(pw.length, 2));
+    drawSeries($('logChartTemp'),  tp, '#3fb950', null, Math.max(tp.length, 2));
+  }
+
+  function openSession(name) {
+    $('logListCard').classList.add('hidden');
+    $('logDetail').classList.remove('hidden');
+    setText('logTitle', String(name).replace(/\.log$/, ''));
+
+    var stats = $('logStats');
+    stats.innerHTML = '';
+    var dt = document.createElement('dt');
+    dt.textContent = '读取中';
+    var dd = document.createElement('dd');
+    dd.textContent = '…';
+    stats.appendChild(dt);
+    stats.appendChild(dd);
+
+    return exec('sh ' + moduleDir() + '/monitor.sh --log ' + name, 30000)
+      .then(function (res) {
+        var k = parseKV(res.stdout || '');
+        var n = num(k['session.count']) || 0;
+        var pts = [];
+
+        for (var i = 0; i < n; i++) {
+          var raw = k['session.s.' + i];
+          if (!raw) continue;
+          var f = raw.split(',');
+          var epoch = num(f[0]);
+          if (!epoch) continue;
+          var cur = num(f[3]);
+          var volt = num(f[4]);
+          pts.push({
+            t: epoch,
+            cap: num(f[1]),
+            temp: tempC(f[2]),
+            power: (cur !== null && volt !== null)
+              ? Math.abs(cur) / 1e6 * (volt / 1e6) : null,
+            counter: num(f[5])
+          });
+        }
+
+        logCur = {
+          name: name,
+          pts: pts,
+          start: num(k['session.start']),
+          end: num(k['session.end']),
+          aborted: (k['session.aborted'] || '').trim() === '1'
+        };
+        renderSession(logCur);
+      })
+      .catch(function (err) {
+        stats.innerHTML = '';
+        var e1 = document.createElement('dt');
+        e1.textContent = '错误';
+        var e2 = document.createElement('dd');
+        e2.textContent = (err && err.message) ? err.message : String(err);
+        stats.appendChild(e1);
+        stats.appendChild(e2);
+      });
+  }
+
+  function backToList() {
+    logCur = null;
+    $('logDetail').classList.add('hidden');
+    $('logListCard').classList.remove('hidden');
+    loadLogs();
+  }
+
+  function bootLogs() {
+    var btns = document.querySelectorAll('[data-tab]');
+    for (var i = 0; i < btns.length; i++) {
+      btns[i].addEventListener('click', function () {
+        switchTab(this.getAttribute('data-tab'));
+      });
+    }
+
+    $('btnLogBack').addEventListener('click', backToList);
+
+    $('btnLogStart').addEventListener('click', function () {
+      var b = $('btnLogStart');
+      b.disabled = true;
+      b.textContent = '启动中…';
+      exec('sh ' + moduleDir() + '/chargelog.sh start', 20000)
+        .then(function () {
+          return new Promise(function (r) { setTimeout(r, 1200); });
+        })
+        .then(loadLogs)
+        .catch(function (err) {
+          setText('logHintText', '启动失败：' + (err && err.message ? err.message : err));
+        })
+        .then(function () {
+          b.disabled = false;
+          b.textContent = '启动记录';
+        });
+    });
   }
 
   /* ------------------------------------------------------------ 主流程 --- */
@@ -701,6 +1005,7 @@
 
   function boot() {
     setText('devModel', '读取中…');
+    bootLogs();
 
     if (!hasKsu()) {
       banner('这个页面需要从 <strong>KernelSU 管理器</strong>里打开才能读取系统数据。'
@@ -735,12 +1040,16 @@
 
     document.addEventListener('visibilitychange', function () {
       if (document.hidden) { stopTimer(); }
+      else if (tab === 'logs') { loadLogs(); }
       else if (autoOn) { refresh(true); startTimer(); }
     });
 
     window.addEventListener('resize', function () {
       clearTimeout(window.__rz);
-      window.__rz = setTimeout(redrawCharts, 150);
+      window.__rz = setTimeout(function () {
+        if (tab === 'logs') { if (logCur) renderSession(logCur); }
+        else redrawCharts();
+      }, 150);
     });
   }
 

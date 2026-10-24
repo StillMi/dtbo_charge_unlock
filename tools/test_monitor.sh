@@ -154,6 +154,13 @@ expect "$OUT" cfg_ffc_high 56
 expect "$OUT" cfg_dry_run 0
 expect "$OUT" cfg_tier max
 
+echo "== 充电日志字段 =="
+expect "$OUT" log_dir "/data/adb/dtbo_charge_unlock/chargelog"
+expect "$OUT" log_interval 30
+expect "$OUT" log_count 0
+expect "$OUT" log_running 0
+expect "$OUT" log_current ""
+
 echo "== --full：分区头部比对（判断是否需重新应用） =="
 PRT="$SB/fake_part.img"
 dd if=/dev/zero of="$PRT" bs=1024 count=64 2>/dev/null
