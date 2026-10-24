@@ -23,6 +23,9 @@ cp "$FAKEPART" "$SANDBOX/original.img"
 MODDIR="$SANDBOX/mod"
 . "$MODDIR/common.sh"
 
+# 这个测试模拟的是「每次开机」，所以要打开开机阶段的状态机
+BOOT_PHASE=1
+
 detect_slot() { SLOT="_a"; SLOTNAME="dtbo_a"; log "[test] 模拟槽位 A"; }
 resolve_partition() {
 	PART="$SANDBOX/partition.img"

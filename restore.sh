@@ -81,8 +81,10 @@ rm -f "$TMP/rb.img" "$TMP/rb.trim"
 
 if [ -n "$A" ] && [ "$A" = "$B" ]; then
 	echo "校验通过，已恢复原始 dtbo。重启后生效。"
-	rm -f "$STATE/last_sha" "$STATE/pending" "$STATE/pending_boot" \
-	      "$STATE/pending_id" "$STATE/pending_tries" "$STATE/confirmed"
+	rm -f "$STATE/last_sha" "$STATE/last_head" "$STATE/flash_high" \
+	      "$STATE/pending" "$STATE/pending_boot" \
+	      "$STATE/pending_id" "$STATE/pending_tries" "$STATE/pending_tries_boot" \
+	      "$STATE/confirmed"
 	echo "已停用 $(date '+%Y-%m-%d %H:%M:%S')" > "$STATE/halted"
 	echo "提示: 若想再次启用本模块，删除 $STATE/halted 即可。"
 else

@@ -42,6 +42,17 @@
 **在安装过程中**就直接完成「提取 → 解包 → 改写 → 打包 → 校验 → 刷入」，
 装完重启即生效，不需要等开机再跑。
 
+> [!IMPORTANT]
+> **只在安装时改，安装之后不会自动再改。**
+>
+> 模块**不会**在每次开机时自己刷 `dtbo`。系统更新（OTA）之后，`dtbo` 分区会被
+> 系统换回原厂版本，改出来的效果就没了 —— 这时候需要**你手动跑一次**：
+> * KernelSU 模块页的 **「操作」按钮**，或
+> * 打开模块的 **WebUI**，点 **「运行修改」**（会二次确认）。
+>
+> 两处跑的是同一个 `action.sh`。WebUI 里如果「分区一致」显示
+> **否（已被覆盖）**、状态显示 **需重新应用**，就是在提示你该跑一次了。
+
 它对**当前系统所在槽位**的 `dtbo` 分区做三件事：
 
 * 把有线充电的 JEITA / 温度分段表改成目标值，使 **0~48 ℃（安全档）或
@@ -66,9 +77,13 @@
   重启 → 新 dtbo 生效
 ```
 
-* **执行时机**：`customize.sh`（安装阶段）里调用同一套 `run_main`，
-  安装界面会实时打印每一步。`post-fs-data.sh` 只在需要时补跑：
-  上一次刷写的开机确认/回滚，以及系统 OTA 把 `dtbo` 换回原厂后重新应用。
+* **执行时机**：只有两个入口会写分区 ——
+  1. `customize.sh`（安装阶段）调用 `run_main`，安装界面实时打印每一步；
+  2. 手动触发：KernelSU 模块页的「操作」按钮（`action.sh`）或 WebUI
+     的「运行修改」。
+
+  `post-fs-data.sh` **不刷写任何东西**，只做只读判断：收掉已确认的 pending、
+  统计「刷写后还没确认开机」的次数、必要时回滚。所以 OTA 之后需要手动跑一次。
 * **镜像格式**：自动识别两种，都能处理——
   * **DTBO 表**（`0xd7b7ab1e` 魔数）：解析 `dt_table_header` 与 `dt_table_entry`，
     逐个条目改写，再按原镜像的布局风格重新排布。
@@ -96,7 +111,7 @@
 ## 二、安装与使用
 
 1. **先按上面那节把 Scene 温控改成「丧心病狂」**，否则装了也不一定有效。
-2. 用 KernelSU（或 Magisk）安装 `dtbo_charge_unlock-v1.6.0.zip`。
+2. 用 KernelSU（或 Magisk）安装 `dtbo_charge_unlock-v1.7.0.zip`。
    **安装过程中就会刷写**，安装界面能看到完整过程与结果。
 3. 安装过程中会让你选档位（见下），选完继续。
 4. 安装完成 → 重启手机 → 新 `dtbo` 生效。
@@ -115,9 +130,8 @@
 **全速段的高温边界**落在 48 还是 56 ℃。48 ℃ 以上两个档位都会开始降功率，
 只是安全档降得更早。
 
-选择结果会**直接写回 `config.conf` 的 `FFC_TEMP_HIGH`**，
-所以之后开机重刷、OTA 后自动重新应用，用的都是同一个档位，
-不会出现「装的时候选了安全档，OTA 一次又变回极限档」。
+选择结果会**直接写回 `config.conf` 的 `FFC_TEMP_HIGH`**，作为唯一事实来源，
+之后每次重跑（手动触发）用的都是同一个档位，不会两边对不上。
 
 如果读不到音量键（例如设备没给 `getevent` 权限），会打印一行提示并保持
 `config.conf` 当前设置，安装继续，不会卡住。
@@ -125,8 +139,10 @@
 不想用按键、想固定档位，就在 `config.conf` 里填 `FORCE_TIER=safe` 或 `max`，
 安装时会跳过按键等待。
 
-> 换档位只能**重新安装**（或用 `FORCE_TIER` + `action.sh` 重跑）才会生效 ——
-> 因为它要改的是分区里的 `dtbo`，不是运行时可调的参数。
+> 换档位改的是分区里的 `dtbo`，不是运行时可调参数，所以**必须重新刷一次**：
+> 改好 `config.conf` 的 `FFC_TEMP_HIGH`，再点「操作」按钮或 WebUI 的
+> 「运行修改」。模块会发现档位和上次刷入的不一样，自动重新刷写；
+> 什么都没改的话它会直接跳过，不会白刷一遍。
 
 想先只看看不写分区，把 `config.conf` 里的 `DRY_RUN` 改成 `1` 再安装，
 安装界面会走到「复核通过」但跳过写入，产物在 `/dev/dtbo_charge_unlock/new.img`。
@@ -137,8 +153,18 @@
 su -c "sh /data/adb/modules/dtbo_charge_unlock/action.sh"
 ```
 
-之后模块不会每次开机都重刷：它按镜像 sha256 判断，只有检测到 `dtbo`
-被换过（例如 OTA）才会重新应用。
+### 系统更新（OTA）之后要做什么
+
+**需要手动跑一次**，否则 `dtbo` 是原厂的，充电限制照旧。
+
+1. 先正常完成 OTA 更新并重启；
+2. 打开 KernelSU → 本模块 → 点 **「操作」**；或点进模块打开 **WebUI →「运行修改」**；
+3. 看到刷写成功后**再重启一次**，新 `dtbo` 才生效。
+
+WebUI 会帮你判断：状态显示 **需重新应用**、「分区一致」显示
+**否（已被覆盖）**，就说明当前分区不是本模块写的了。
+
+模块不会在开机时偷偷帮你改回去 —— 这是有意的：写分区是需要你知道的操作。
 
 ### 在 KernelSU 里看充电状态（WebUI）
 
@@ -152,10 +178,15 @@ su -c "sh /data/adb/modules/dtbo_charge_unlock/action.sh"
 * 功率与温度的实时曲线（最近 5 分钟）
 * 电池/充电/PMIC 相关温度区
 * 模块自身状态：是否已应用、上次刷写时间、是否在等开机确认、备份情况
+* **是否还是本模块写入的那份**（「分区一致」）—— 系统更新后这里会变成
+  **否（已被覆盖）**，状态也会提示 **需重新应用**
 
-这个页面是**只读**的：只用 `ksu.exec` 跑 `monitor.sh` 读 `/sys`、`/proc`
-和模块自己的 `state/`，不写任何分区、不改任何配置，也不会触发刷写。
-所以放心开着看，不会影响已生效的 dtbo。
+页面上的采集是**只读**的：只用 `ksu.exec` 跑 `monitor.sh` 读 `/sys`、`/proc`
+和模块自己的 `state/`，不写分区、不改配置。
+
+唯一的写操作是 **「运行修改」按钮**：点了会先弹确认框，确认后执行模块自带的
+`action.sh`，由它完成「解包 → 改写 → 备份 → 刷入 → 回读校验」，并把过程和
+退出码回显在页面上。页面本身不直接写分区，也不会在你没点的情况下刷写。
 
 温度窗口那条只是「目标值」，实际充电功率还受充电器、线材、SoC 温度等影响，
 页面不会把这些混为一谈。
@@ -164,12 +195,18 @@ su -c "sh /data/adb/modules/dtbo_charge_unlock/action.sh"
 
 | 机制 | 说明 |
 | --- | --- |
+| 只手动触发 | 只有安装时、以及手动点「操作」/「运行修改」时才写分区；开机阶段绝不自动刷写 |
 | 备份 | 刷写前把整个分区备份到 `backup/dtbo_a_YYYYmmdd-HHMMSS.img`，并校验备份完整 |
 | 刷前复核 | 新镜像必须能反编译回来，且 174 项参数逐条匹配，否则中止 |
 | 刷后回读 | 写入后回读分区比对 sha256，不一致立刻回滚 |
 | 开机确认 | 每次刷写生成一个一次性令牌；下次开机走到 `service.sh`（开机后期）即记为确认 |
 | 自动回滚 | 刷写后连续 3 次开机都没走到开机后期，判定新 dtbo 有问题，自动写回备份并停用模块 |
-| 安装失败不阻断 | 安装阶段刷写失败（例如分区只读）时模块照常装好，下次开机再试；想直接中止可设 `ABORT_ON_INSTALL_FAIL=1` |
+| 重复运行不白刷 | 镜像和档位都没变时直接跳过；只改了档位会自动重刷 |
+| 安装失败不阻断 | 安装阶段刷写失败（例如分区只读）时模块照常装好，可手动再跑一次；想直接中止可设 `ABORT_ON_INSTALL_FAIL=1` |
+
+> 自动回滚是唯一会在开机阶段写分区的动作，而且只在「刷完连续 3 次起不来」
+> 这种已经出事的情况下才动手。它是用来把人从变砖循环里救出来的，
+> 不是常规的自动刷写。
 
 > **不检查 bootloader 锁定状态。** KernelSU 会伪造 `ro.boot.flash.locked` /
 > `ro.boot.verifiedbootstate`（例如报成 `green`），按它们判断只会把正常设备
@@ -215,7 +252,7 @@ dtbo_charge_unlock/
 ├── customize.sh          安装时执行：权限 + 立刻刷写
 ├── config.conf           用户配置
 ├── common.sh             核心逻辑（槽位/分区/改写/校验/刷写）
-├── post-fs-data.sh       开机早期：确认/回滚、OTA 后重新应用
+├── post-fs-data.sh       开机早期：确认/回滚（不刷写）
 ├── service.sh            开机后期：确认「新 dtbo 能正常开机」
 ├── action.sh             KernelSU「操作」按钮 / 手动执行
 ├── restore.sh            手工回滚
@@ -294,12 +331,17 @@ sh tools/test_rollback.sh  . build/part_dtbo.img  /path/to/dtc build/sb_rb
 sh tools/test_edge.sh      . build/part_dtbo.img  /path/to/dtc build/sb_edge
 sh tools/test_module.sh    . build/part_dtbo.img  /path/to/dtc build/sandbox
 
-# 2b) 档位与音量键
+# 2b) 「只在安装时改」这条约定
+sh tools/test_manual.sh    . build/part_dtbo.img  /path/to/dtc build/sb_manual
+                           # 原厂分区 + 无状态时开机脚本不许动手；
+                           # 手动 action.sh 才刷；刷完开机仍不许动
+
+# 2c) 档位与音量键
 sh tools/test_key.sh     . build/sb_key          # 事件行解析 + tier_pick 各分支
 sh tools/test_tier.sh    . build/part_dtbo.img /path/to/dtc build/tier
                          # 两个档位真的写进 dtbo：ffc_temp_high = <0x30> / <0x38>
 
-# 2c) WebUI 采集脚本自测（造一棵假 sysfs，检查每个输出字段）
+# 2d) WebUI 采集脚本自测（造一棵假 sysfs，检查每个输出字段）
 sh tools/test_monitor.sh   . build/sb_mon
 
 # 3) 重新生成改写规则（换了参考 dts 才需要）
@@ -307,7 +349,7 @@ python tools/gen_ref.py  <参考.dts> ref
 python tools/gen_sed.py  ref/patch.list ref
 
 # 4) 打包（内置编码检查，有 CRLF / BOM 会直接拒绝）
-python tools/package.py  . dist/dtbo_charge_unlock-v1.6.0.zip
+python tools/package.py  . dist/dtbo_charge_unlock-v1.7.0.zip
 ```
 
 WebUI 的页面逻辑也可以在 PC 上验证，不需要设备。做法是造一个假的 `ksu`
@@ -315,11 +357,14 @@ WebUI 的页面逻辑也可以在 PC 上验证，不需要设备。做法是造�
 
 ```sh
 # 5) 先采一份 monitor.sh 的输出当数据源
-SYSFS_ROOT=build/sb_mon/sys MODDIR=build/sb_mon/mod sh monitor.sh > build/monitor_sample.txt
+#    带 --full 才会顺便算出「当前分区是否仍是刷入的那份」
+mkdir -p build/sb_mon/mod/state
+SYSFS_ROOT=build/sb_mon/sys MODDIR=build/sb_mon/mod sh monitor.sh --full \
+  > build/monitor_sample.txt
 
 # 6) 渲染 + 断言（需要一个 Chromium 内核浏览器的路径）
 python tools/mkwebui_harness.py . build/webui build/monitor_sample.txt
-<浏览器> --headless=new --virtual-time-budget=16000 \
+<浏览器> --headless=new --virtual-time-budget=24000 \
          --dump-dom "file:///<绝对路径>/build/webui/index.html" > build/dom.html
 
 # 7) 状态分支：充电中 / 放电 / 已充满 / 过热越界 / 低于下限 / 已停用 / 无电池节点
@@ -334,11 +379,12 @@ python tools/webui_scenarios.py . build/wsc "<浏览器路径>" build/monitor_sa
 | --- | --- |
 | `test_load.sh` | `common.sh` 能被正常 source，所有函数都定义齐全 |
 | `test_install.sh` | 模拟安装器跑 `customize.sh`：安装阶段即完成刷写、备份、状态落盘 |
-| `test_lifecycle.sh` | 安装 → 重启确认 → 再次开机清理状态 → 第三次识别为已刷过 |
+| `test_lifecycle.sh` | 安装 → 重启确认 → 再次开机清理状态；每一步都比对分区 sha256，确认**开机没有改动分区**；最后模拟 OTA 换回原厂，确认开机**不会**自动重新应用 |
+| `test_manual.sh` | 「只手动触发」约定：原厂分区 + 无状态时开机脚本不许动手；手动 `action.sh` 才刷；刷完开机仍不许动；重复运行跳过；`last_head` 与分区开头一致 |
 | `test_rollback.sh` | 连续 3 次开机未确认 → 自动回滚 → 写 `halted` → 后续跳过 |
 | `test_edge.sh` | 令牌匹配/不匹配、同一次开机内刷写不计数、校验器正反两向、`FORCE_SLOT` |
-| `test_module.sh` | DTBO 表（3 条目 / 单条目 / 混合板型 / **大端+紧凑布局**）、裸 DTB 单段与双段、已刷过跳过、演练模式、A/B 与单分区槽位 |
-| `test_monitor.sh` | WebUI 采集脚本：电池/电源/温度区字段、模块状态四态、无电池节点时降级 |
+| `test_module.sh` | DTBO 表（3 条目 / 单条目 / 混合板型 / **大端+紧凑布局**）、裸 DTB 单段与双段、已刷过跳过、只换档位会重刷、演练模式、A/B 与单分区槽位 |
+| `test_monitor.sh` | WebUI 采集脚本：电池/电源/温度区字段、模块状态四态、无电池节点时降级、`--full` 时的分区头部比对 |
 | `test_key.sh` | 音量键解析（按下/抬起/无关事件/多行）与 `tier_pick` 各分支：音量下→48、音量上→56、不按、`FORCE_TIER` 合法/乱填、`TIER_PROMPT=0` |
 | `test_tier.sh` | 逐个档位跑完整安装，再把刷好的分区拆出来反编译，确认 `ffc_temp_high = <0x30>/<0x38>` 与 JEITA 高温边界真的是 48/56，且安全档里不残留 `0x38` |
 

@@ -61,6 +61,8 @@ if [ "$RC" -eq 0 ]; then
 		ui_print "  原始镜像备份: $(cat "$MODPATH/state/backup" 2>/dev/null)"
 		ui_print "- 刷入后的首次开机会自动确认能否正常启动；"
 		ui_print "  若连续 3 次开机都起不来，会自动回滚原始 dtbo 并停用本模块。"
+		ui_print "- 以后模块不会自动再刷。系统 OTA 之后请手动点一次"
+		ui_print "  KernelSU 的「操作」按钮，或打开 WebUI 点「运行修改」。"
 		ui_print "- 提醒: 系统层温控优先级高于 dtbo，"
 		ui_print "  需要先在 Scene 里把温控等级改成「丧心病狂」，否则可能看不到提速。"
 	else
@@ -71,7 +73,8 @@ if [ "$RC" -eq 0 ]; then
 	fi
 else
 	ui_print "- 安装阶段刷写未完成（见上方日志）"
-	ui_print "  模块仍会安装，下次开机会自动再试一次。"
+	ui_print "  模块已安装，但分区没改。可以进 KernelSU 模块页点「操作」，"
+	ui_print "  或打开 WebUI 点「运行修改」重试。"
 	ui_print "  日志: $MODPATH/logs/"
 	if [ "$ABORT_ON_INSTALL_FAIL" = "1" ]; then
 		abort "- ABORT_ON_INSTALL_FAIL=1，中止安装"

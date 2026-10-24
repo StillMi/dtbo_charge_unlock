@@ -84,7 +84,7 @@ else
 fi
 
 # 2) 状态文件应齐全
-for f in last_sha backup part orig_sha pending pending_boot; do
+for f in last_sha last_head flash_high backup part orig_sha pending pending_boot; do
 	if [ -f "$SANDBOX/mod/state/$f" ]; then
 		echo "[ OK ] state/$f = $(cat "$SANDBOX/mod/state/$f")"
 	else

@@ -68,6 +68,8 @@ font:11px/1.55 monospace;white-space:pre-wrap">report 未运行</pre>
     r.push('windowHint=' + txt('windowHint'));
     r.push('moduleChip=' + txt('moduleChip'));
     r.push('moduleClass=' + (mc ? mc.className : ''));
+    r.push('applied=' + txt('kApplied'));
+    r.push('applyBtn=' + txt('btnApply'));
     r.push('thermal=' + document.querySelectorAll('#thermalList li').length);
     document.getElementById('__check').textContent = r.join('\\n');
   }, 11000);
@@ -140,6 +142,16 @@ def sc_safe(t):
     return t
 
 
+def sc_reapply(t):
+    # 系统 OTA 之后分区被换回原厂：state_cur_head 与 state_last_head 对不上，
+    # 页面应该提示「需重新应用」。
+    # 样本里带着「等待开机确认」的 pending，会盖住这个判断，先清掉。
+    t = setkv(t, "state_cur_head", "0" * 64)
+    t = setkv(t, "state_pending", "")
+    t = setkv(t, "state_confirmed", "")
+    return t
+
+
 SCENARIOS = [
     ("充电中", sc_charging, {
         "errors": "0", "banner": "hidden",
@@ -167,6 +179,12 @@ SCENARIOS = [
         "errors": "0", "temp": "50.0",
         "markerClass_has": "out",
         "windowHint": "安全档 · 0~48℃ 全速",
+    }),
+    ("OTA 后需重新应用", sc_reapply, {
+        "errors": "0",
+        "moduleChip": "需重新应用", "moduleClass_has": "warn",
+        "applied_has": "否",
+        "applyBtn": "运行修改",
     }),
     ("电池低于下限", sc_cold, {
         "errors": "0", "temp": "-2.5",

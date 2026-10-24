@@ -152,6 +152,37 @@ expect "$OUT" backup_count 2
 expect "$OUT" cfg_ffc_low 0
 expect "$OUT" cfg_ffc_high 56
 expect "$OUT" cfg_dry_run 0
+expect "$OUT" cfg_tier max
+
+echo "== --full：分区头部比对（判断是否需重新应用） =="
+PRT="$SB/fake_part.img"
+dd if=/dev/zero of="$PRT" bs=1024 count=64 2>/dev/null
+printf 'DTBOHEAD' | dd of="$PRT" bs=1 seek=0 conv=notrunc 2>/dev/null
+printf '%s\n' "$PRT" > "$MOD/state/part"
+_head=$(dd if="$PRT" bs=1048576 count=1 2>/dev/null | sha256sum | cut -d' ' -f1)
+printf '%s\n' "$_head" > "$MOD/state/last_head"
+
+SYSFS_ROOT="$SYS" MODDIR="$MOD" sh "$MODDIR_SRC/monitor.sh" --full > "$SB/out4.txt" 2>&1
+expect "$SB/out4.txt" state_last_head "$_head"
+expect "$SB/out4.txt" state_cur_head "$_head"
+
+# 不带 --full 时不该去读分区（轮询每 2 秒一次，不能反复读盘）
+SYSFS_ROOT="$SYS" MODDIR="$MOD" sh "$MODDIR_SRC/monitor.sh" > "$SB/out5.txt" 2>&1
+if grep -q '^state_cur_head=' "$SB/out5.txt" 2>/dev/null; then
+	bad "不带 --full 时也读了分区"
+else
+	ok "不带 --full 时跳过分区读取"
+fi
+
+# 分区被换掉（模拟系统 OTA）→ 哈希不再一致
+printf 'STOCK!!!' | dd of="$PRT" bs=1 seek=0 conv=notrunc 2>/dev/null
+SYSFS_ROOT="$SYS" MODDIR="$MOD" sh "$MODDIR_SRC/monitor.sh" --full > "$SB/out6.txt" 2>&1
+_cur=$(grep '^state_cur_head=' "$SB/out6.txt" 2>/dev/null | cut -d= -f2-)
+if [ -n "$_cur" ] && [ "$_cur" != "$_head" ]; then
+	ok "分区被覆盖后 state_cur_head 变化"
+else
+	bad "分区覆盖后哈希没变（$_cur）"
+fi
 
 echo "== 没有电池节点时也要能跑 =="
 mv "$PS/battery" "$PS/battery.off"

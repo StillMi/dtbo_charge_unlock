@@ -121,6 +121,7 @@ S="$MODDIR/state"
 emit state_last_sha  "$(rd "$S/last_sha")"
 emit state_orig_sha  "$(rd "$S/orig_sha")"
 emit state_part      "$(rd "$S/part")"
+emit state_last_head "$(rd "$S/last_head")"
 emit state_pending   "$(rd "$S/pending")"
 emit state_pending_id "$(rd "$S/pending_id")"
 emit state_pending_tries "$(rd "$S/pending_tries")"
@@ -157,5 +158,17 @@ case "$_cfg_high" in
 	"") emit cfg_tier ref ;;
 	*)  emit cfg_tier custom ;;
 esac
+
+# ------------------------------------------- 可选：当前分区是否仍是刷入的那份 ---
+# 只在带 --full 时做。要读分区开头 1MB 算哈希，轮询时不该反复读盘。
+# 系统 OTA 会把 dtbo 换回原厂，页面靠这两项提示「需要重新运行一次」。
+if [ "${1:-}" = "--full" ]; then
+	_prt=$(rd "$S/part")
+	if [ -n "$_prt" ] && [ -r "$_prt" ]; then
+		_cur=$(dd if="$_prt" bs=1048576 count=1 2>/dev/null \
+			| sha256sum 2>/dev/null | cut -d' ' -f1)
+		[ -n "$_cur" ] && emit state_cur_head "$_cur"
+	fi
+fi
 
 exit 0

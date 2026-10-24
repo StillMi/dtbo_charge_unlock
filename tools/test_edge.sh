@@ -26,6 +26,7 @@ cp "$FAKEPART" "$SANDBOX/partition.img"
 MODDIR="$SANDBOX/mod"
 . "$MODDIR/common.sh"
 
+
 # 注意：不覆盖 detect_slot —— 用真实的实现，靠 FORCE_SLOT=a 在主机上指定槽位
 FORCE_SLOT=a
 
@@ -67,7 +68,7 @@ echo "TOKEN-AAA" > "$MODDIR/state/pending_id"
 echo 0 > "$MODDIR/state/pending_tries"
 echo "TOKEN-AAA" > "$MODDIR/state/confirmed"
 sha256sum "$SANDBOX/partition.img" | cut -d' ' -f1 > "$MODDIR/state/last_sha"
-run_main >/dev/null 2>&1
+boot_guard >/dev/null 2>&1
 if [ -f "$P" ]; then
 	echo "[FAIL] pending 未被清除"
 	FAILED=1
@@ -85,7 +86,7 @@ age_pending
 echo "TOKEN-BBB" > "$MODDIR/state/pending_id"
 echo 0 > "$MODDIR/state/pending_tries"
 echo "TOKEN-OLD" > "$MODDIR/state/confirmed"
-run_main >/dev/null 2>&1
+boot_guard >/dev/null 2>&1
 T=$(cat "$MODDIR/state/pending_tries" 2>/dev/null)
 if [ "$T" = "1" ] && [ -f "$P" ]; then
 	echo "[ OK ] 令牌不匹配时不确认（tries=1，pending 保留）"
@@ -99,7 +100,7 @@ echo
 echo "=== 场景 2: 没有 confirmed、tries 未到 3，应只跳过不回滚 ==="
 echo 0 > "$MODDIR/state/pending_tries"
 rm -f "$MODDIR/state/confirmed"
-run_main >/dev/null 2>&1
+boot_guard >/dev/null 2>&1
 T=$(cat "$MODDIR/state/pending_tries" 2>/dev/null)
 if [ "$T" = "1" ] && [ -f "$P" ]; then
 	echo "[ OK ] 已跳过且 tries=1，未回滚"
@@ -113,7 +114,7 @@ echo
 echo "=== 场景 3: 本次开机内刚刷写，不应计数 ==="
 freshen_pending
 echo 0 > "$MODDIR/state/pending_tries"
-run_main >/dev/null 2>&1
+boot_guard >/dev/null 2>&1
 T=$(cat "$MODDIR/state/pending_tries" 2>/dev/null)
 if [ "$T" = "0" ]; then
 	echo "[ OK ] 未计数（tries 仍为 0），符合预期"
@@ -131,6 +132,8 @@ W2="$SANDBOX/work2"
 rm -rf "$W2"; mkdir -p "$W2"
 WORK="$W2"
 build_runtime_rules >/dev/null 2>&1
+# split_dtbs 会用 PSIZE 校验总长度，前面不再经过 run_main，这里要自己补上
+PSIZE=$(wc -c < "$SANDBOX/partition.img" | tr -d ' \t\r\n')
 split_dtbs "$SANDBOX/partition.img" >/dev/null 2>&1 || { echo "[FAIL] 无法拆出 DTB"; exit 1; }
 STOCK=""
 _n=0

@@ -1,6 +1,8 @@
 /* ==========================================================================
    dtbo_charge_unlock · 充电状态 WebUI
-   只读：仅通过 ksu.exec 运行 monitor.sh 采集数据，不做任何写操作。
+   采集是只读的（monitor.sh 只读 /sys /proc 和模块状态文件）。
+   唯一的写操作是「运行修改」按钮：二次确认后执行模块自带的 action.sh，
+   由它完成「解包 → 改写 → 备份 → 刷入 → 回读校验」，本页面不直接写分区。
    ========================================================================== */
 (function () {
   'use strict';
@@ -74,8 +76,11 @@
    * 包装 KernelSU 的原生 exec。
    * 原生签名: ksu.exec(command, optionsJson, callbackName)
    * 执行结束后由原生侧调用 window[callbackName](errno, stdout, stderr)
+   *
+   * 采集只要几百毫秒，刷写可能要十几秒，所以超时做成参数。
    */
-  function exec(command) {
+  function exec(command, timeoutMs) {
+    var limit = timeoutMs || 15000;
     return new Promise(function (resolve, reject) {
       if (!hasKsu()) {
         reject(new Error('缺少 KernelSU 接口'));
@@ -101,8 +106,8 @@
       setTimeout(function () {
         if (settled) return;
         try { delete window[name]; } catch (e) {}
-        reject(new Error('采集超时'));
-      }, 15000);
+        reject(new Error('执行超时（' + Math.round(limit / 1000) + ' 秒）'));
+      }, limit);
     });
   }
 
@@ -209,12 +214,21 @@
     d.ffcHigh = num(k.cfg_ffc_high);
     d.tier    = (k.cfg_tier || '').trim();
 
-    /* 模块状态：停用 > 待确认 > 已应用 > 未刷写 */
+    /* 分区是否还是我们刷进去的那份。
+       cur_head 只在 --full 采集时才算（要读分区头部 1MB），
+       轮询时沿用上一次的结果，避免每 2 秒读一次盘。 */
+    d.lastHead = (k.state_last_head || '').trim();
+    if (k.state_cur_head) curHead = (k.state_cur_head || '').trim();
+    d.headMatch = (d.lastHead && curHead) ? (d.lastHead === curHead) : null;
+
+    /* 模块状态：停用 > 待确认 > 需重新应用 > 已应用 > 未刷写 */
     if (k.state_halted === '1') {
       d.mod = { text: '已回滚停用', cls: 'bad', note: '连续开机未确认，已写回备份' };
     } else if (k.state_pending && k.state_pending !== k.state_confirmed) {
       var tries = num(k.state_pending_tries) || 0;
       d.mod = { text: '等待开机确认', cls: 'warn', note: '第 ' + (tries + 1) + ' 次开机' };
+    } else if (d.headMatch === false) {
+      d.mod = { text: '需重新应用', cls: 'warn', note: 'dtbo 已不是本模块写入的那份（系统更新过？），点「运行修改」重新写入' };
     } else if (d.sha) {
       d.mod = { text: '已应用', cls: 'ok', note: 'dtbo 已改写并确认' };
     } else {
@@ -227,6 +241,8 @@
   /* ------------------------------------------------------------ 渲染 --- */
 
   var last = null;
+  /* 当前分区头部哈希，只有 --full 采集会更新 */
+  var curHead = '';
 
   function setText(id, s) {
     var el = $(id);
@@ -420,6 +436,17 @@
     setText('kPart', d.part || '—');
     setText('kSha', d.sha ? d.sha.slice(0, 16) + '…' : '—');
 
+    if (d.headMatch === true) {
+      setText('kApplied', '是（与刷入时一致）');
+      $('kApplied').className = 'ok';
+    } else if (d.headMatch === false) {
+      setText('kApplied', '否（已被覆盖）');
+      $('kApplied').className = 'warn';
+    } else {
+      setText('kApplied', '—');
+      $('kApplied').className = '';
+    }
+
     if (d.backupFile) {
       var name = d.backupFile.split('/').pop();
       var size = d.backupSize !== null ? (d.backupSize / 1024 / 1024).toFixed(1) + ' MB' : '';
@@ -542,12 +569,12 @@
   var timer = null;
   var autoOn = true;
 
-  function refresh() {
+  function refresh(full) {
     if (busy) return Promise.resolve();
     busy = true;
     $('btnRefresh').classList.add('busy');
 
-    return exec('sh ' + moduleDir() + '/monitor.sh')
+    return exec('sh ' + moduleDir() + '/monitor.sh' + (full ? ' --full' : ''))
       .then(function (res) {
         if (res.errno !== 0 && !res.stdout) {
           throw new Error((res.stderr || '').trim() || ('monitor.sh 返回 ' + res.errno));
@@ -581,11 +608,95 @@
   function startTimer() {
     stopTimer();
     if (!autoOn) return;
-    timer = setInterval(refresh, POLL_MS);
+    timer = setInterval(function () { refresh(false); }, POLL_MS);
   }
 
   function stopTimer() {
     if (timer) { clearInterval(timer); timer = null; }
+  }
+
+  /* --------------------------------------------------------- 运行修改 --- */
+
+  var applying = false;
+
+  function applyOut(text) {
+    var el = $('applyOut');
+    el.classList.remove('hidden');
+    el.textContent = text;
+  }
+
+  function askConfirm(text) {
+    return new Promise(function (resolve) {
+      var box = $('confirm');
+      $('confirmText').innerHTML = text;
+      box.classList.remove('hidden');
+
+      function done(val) {
+        box.classList.add('hidden');
+        $('confirmYes').removeEventListener('click', yes);
+        $('confirmNo').removeEventListener('click', no);
+        resolve(val);
+      }
+      function yes() { done(true); }
+      function no() { done(false); }
+
+      $('confirmYes').addEventListener('click', yes);
+      $('confirmNo').addEventListener('click', no);
+    });
+  }
+
+  function doApply() {
+    if (applying) return;
+    applying = true;
+
+    var btn = $('btnApply');
+    btn.disabled = true;
+    btn.textContent = '正在执行…';
+    stopTimer();
+    applyOut('开始执行，刷写期间请不要退出页面…');
+
+    exec('sh ' + moduleDir() + '/action.sh', 240000)
+      .then(function (res) {
+        var out = (res.stdout || '');
+        if (res.stderr) out += (out ? '\n' : '') + res.stderr;
+        out += '\n--- 退出码: ' + res.errno + ' ---';
+        applyOut(out);
+        if (res.errno === 0) {
+          banner('已执行完成。新 dtbo <strong>需要重启</strong>后才生效。', 'ok');
+        } else {
+          banner('执行未成功（退出码 ' + res.errno + '），详见下方输出。分区可能未被修改。', 'err');
+        }
+      })
+      .catch(function (err) {
+        applyOut('执行失败：' + (err && err.message ? err.message : err));
+        banner('执行失败：' + (err && err.message ? err.message : err), 'err');
+      })
+      .then(function () {
+        applying = false;
+        btn.disabled = false;
+        btn.textContent = '运行修改';
+        return refresh(true);
+      })
+      .then(function () { if (autoOn) startTimer(); });
+  }
+
+  function bootApply() {
+    $('btnApply').addEventListener('click', function () {
+      var d = last;
+      var slot = d && d.part ? d.part : '当前槽位';
+      var warn = '';
+      if (d && d.headMatch === false) {
+        warn = '<br><br><strong>注意：现在分区里的 dtbo 已经不是本模块写入的那份'
+             + '（大概被系统更新覆盖了），这次会重新改写。</strong>';
+      }
+      askConfirm(
+        '将会<b>重新解包、改写并刷入</b> <code>' + slot + '</code>。'
+        + '<br><br>刷写前会自动备份原始镜像，刷完回读校验，失败会自动写回。'
+        + '<br>刷入后需要<b>重启</b>才生效。' + warn
+      ).then(function (ok) {
+        if (ok) doApply();
+      });
+    });
   }
 
   function boot() {
@@ -610,20 +721,21 @@
       })
       .catch(function () { setText('devModel', '未知机型'); });
 
-    refresh().then(startTimer);
+    refresh(true).then(startTimer);
 
-    $('btnRefresh').addEventListener('click', function () { refresh(); });
+    $('btnRefresh').addEventListener('click', function () { refresh(true); });
+    bootApply();
 
     var toggle = $('autoToggle');
     toggle.addEventListener('change', function () {
       autoOn = toggle.checked;
-      if (autoOn) { refresh(); startTimer(); }
+      if (autoOn) { refresh(false); startTimer(); }
       else { stopTimer(); }
     });
 
     document.addEventListener('visibilitychange', function () {
       if (document.hidden) { stopTimer(); }
-      else if (autoOn) { refresh(); startTimer(); }
+      else if (autoOn) { refresh(true); startTimer(); }
     });
 
     window.addEventListener('resize', function () {

@@ -135,9 +135,20 @@
       <div><dt>上次刷写</dt><dd id="kLastFlash">—</dd></div>
       <div><dt>写入分区</dt><dd id="kPart">—</dd></div>
       <div><dt>镜像 SH</dt><dd id="kSha" class="mono">—</dd></div>
+      <div><dt>分区一致</dt><dd id="kApplied">—</dd></div>
       <div><dt>备份</dt><dd id="kBackup">—</dd></div>
       <div><dt>演练模式</dt><dd id="kDryRun">—</dd></div>
     </dl>
+
+    <div class="apply-box">
+      <button id="btnApply" class="danger" type="button">运行修改</button>
+      <p class="fine" id="applyHint">
+        模块<strong>只在安装时</strong>刷一次，开机不会自动再改。系统更新（OTA）之后
+        <code>dtbo</code> 会回到原厂，需要用这个按钮手动跑一次。
+        执行时会重新解包 / 改写 / 刷入当前槽位，刷前自动备份、刷后回读校验。
+      </p>
+      <pre id="applyOut" class="raw hidden"></pre>
+    </div>
   </section>
 
   <!-- -------------------------------------------------------- 原始数据 --- -->
@@ -151,9 +162,23 @@
 </main>
 
 <footer>
-  <p>本页面<strong>只读</strong>：仅读取 <code>/sys</code>、<code>/proc</code> 与模块自身的状态文件，不会修改任何分区或配置。</p>
+  <p>页面<strong>只读取</strong> <code>/sys</code>、<code>/proc</code> 与模块状态文件。
+  唯一的写操作是「运行修改」按钮 —— 需要二次确认，执行的是模块自带的
+  <code>action.sh</code>（刷写前自动备份、刷后回读校验）。</p>
   <p class="dim">数据每 2 秒采集一次；切到后台时自动暂停。</p>
 </footer>
+
+<!-- ------------------------------------------------------------ 确认框 --- -->
+<div id="confirm" class="modal hidden">
+  <div class="modal-box">
+    <h3 id="confirmTitle">确认刷写 dtbo？</h3>
+    <p id="confirmText">—</p>
+    <div class="modal-actions">
+      <button id="confirmNo" type="button">取消</button>
+      <button id="confirmYes" type="button" class="danger">确定执行</button>
+    </div>
+  </div>
+</div>
 
 <script src="app.js"></script>
 </body>

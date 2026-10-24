@@ -30,6 +30,7 @@ STUB = """<script>
   }
 
   window.__errors = [];
+  window.__calls = [];
   window.onerror = function (m, s, l, c, err) {
     window.__errors.push((err && err.stack ? err.stack : m) + ' @' + l);
     return false;
@@ -38,6 +39,7 @@ STUB = """<script>
   window.ksu = {
     exec: function (cmd, opts, cb) {
       var i = n++;
+      window.__calls.push(cmd);
       setTimeout(function () {
         try { window[cb](0, variant(BASE, i), ''); }
         catch (e) { window.__errors.push('callback: ' + e); }
@@ -82,8 +84,8 @@ font:11px/1.55 monospace;white-space:pre-wrap">check 未运行</pre>
     chk('js-errors', errs.length === 0, errs.join(' | '));
 
     var bn = document.getElementById('banner');
-    chk('无错误横幅', bn && bn.classList.contains('hidden'),
-        bn ? (bn.textContent || bn.className) : '缺失');
+    chk('横幅不是错误', !bn || !/\\berr\\b/.test(bn.className),
+        bn ? bn.className : '缺失');
 
     chk('cap-有数值', numish(txt('capValue')), txt('capValue'));
     chk('power-有数值', numish(txt('powerValue')), txt('powerValue'));
@@ -122,7 +124,30 @@ font:11px/1.55 monospace;white-space:pre-wrap">check 未运行</pre>
     chk('模块状态已填', txt('moduleChip') !== '—', txt('moduleChip'));
     chk('上次刷写已填', txt('kLastFlash') !== '—', txt('kLastFlash'));
     chk('分区已填', txt('kPart') !== '—', txt('kPart'));
+    chk('分区一致已判定', txt('kApplied') !== '—', txt('kApplied'));
     chk('备份已填', txt('kBackup') !== '—', txt('kBackup'));
+
+    var ab = document.getElementById('btnApply');
+    chk('运行修改按钮可见',
+        ab && txt('btnApply') === '运行修改'
+           && ab.getBoundingClientRect().height > 20,
+        ab ? txt('btnApply') + ' h=' + Math.round(ab.getBoundingClientRect().height) : '缺失');
+    chk('确认框默认隐藏',
+        document.getElementById('confirm').classList.contains('hidden'),
+        document.getElementById('confirm').className);
+
+    /* ---- 「运行修改」交互 ---- */
+    var ap = window.__apply || {};
+    chk('点按钮弹出确认框', ap.opened === true, 'opened=' + ap.opened);
+    chk('确认前不调用刷写', ap.calledBefore === false, 'calledBefore=' + ap.calledBefore);
+    chk('确认后调用 action.sh', ap.called === true,
+        (ap.calls || []).join(' | '));
+    chk('执行后回显输出', txt('applyOut').length > 0,
+        txt('applyOut').slice(0, 40));
+    chk('按钮已恢复', txt('btnApply') === '运行修改', txt('btnApply'));
+    chk('确认框已关闭',
+        document.getElementById('confirm').classList.contains('hidden'),
+        document.getElementById('confirm').className);
 
     chk('原始数据已填', txt('rawDump').indexOf('capacity=') >= 0,
         (txt('rawDump').split('\\n').length) + ' 行');
@@ -152,6 +177,33 @@ font:11px/1.55 monospace;white-space:pre-wrap">check 未运行</pre>
 </script>
 """
 
+# 「运行修改」交互：点按钮 → 弹确认框 → 确认后才 exec action.sh
+APPLY = """<script>
+(function () {
+  setTimeout(function () {
+    var ab = document.getElementById('btnApply');
+    var modal = document.getElementById('confirm');
+    var n0 = (window.__calls || []).length;
+    var ap = { opened: false, called: false, calledBefore: false, calls: [] };
+    window.__apply = ap;
+
+    ab.click();
+    ap.opened = !modal.classList.contains('hidden');
+    ap.calledBefore = (window.__calls || []).length > n0;
+
+    document.getElementById('confirmYes').click();
+    setTimeout(function () {
+      ap.calls = (window.__calls || []).slice(n0);
+      for (var i = 0; i < ap.calls.length; i++) {
+        if (/action\\.sh/.test(ap.calls[i])) ap.called = true;
+      }
+      window.__applyDone = true;
+    }, 1600);
+  }, 10200);
+})();
+</script>
+"""
+
 
 def main():
     if len(sys.argv) < 4:
@@ -173,7 +225,7 @@ def main():
 
     html = html.replace('<script src="app.js"></script>',
                         STUB % json.dumps(base) +
-                        '<script src="app.js"></script>' + ERRBOX)
+                        '<script src="app.js"></script>' + ERRBOX + APPLY)
 
     with open(index, "w", encoding="utf-8", newline="\n") as fh:
         fh.write(html)

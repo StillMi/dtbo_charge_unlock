@@ -1,6 +1,11 @@
 #!/system/bin/sh
-# KernelSU 模块「操作」按钮：重新执行一次刷写流程，并把过程打印出来。
-# 也可以手动执行:  su -c "sh /data/adb/modules/dtbo_charge_unlock/action.sh"
+# 手动触发入口：重新执行一次刷写流程，并把过程打印出来。
+#   * KernelSU 模块页的「操作」按钮
+#   * WebUI 的「运行修改」按钮（需要二次确认）
+#   * 也可以手动执行:  su -c "sh /data/adb/modules/dtbo_charge_unlock/action.sh"
+#
+# 模块只在安装时和这里改分区；开机阶段不会自动刷写。
+# 系统 OTA 之后 dtbo 会回到原厂，需要跑一次这个脚本。
 
 MODDIR="${0%/*}"
 [ -f "$MODDIR/common.sh" ] || MODDIR=/data/adb/modules/dtbo_charge_unlock

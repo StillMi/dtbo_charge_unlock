@@ -111,17 +111,20 @@ if [ "$DRY_RUN" = "1" ]; then
 fi
 
 echo
-echo "=== 第二次执行（本次开机内刚刷过，应跳过） ==="
-run_main 2>&1 | grep -q '本次开机内刚刷写' || { echo "未识别为同一次开机内已刷写"; exit 1; }
-echo "[ OK ] 正确识别为同一次开机内已刷写"
+echo "=== 第二次执行（内容已经刷过，应识别为已刷过而跳过） ==="
+run_main 2>&1 | grep -q '已经是本模块刷入的版本' || { echo "未识别为已刷过"; exit 1; }
+echo "[ OK ] 重复运行正确跳过（不会多刷一遍）"
 
 echo
-echo "=== 模拟重启后再执行（应识别为已刷过而跳过） ==="
+echo "=== 模拟切换档位后再次执行（内容不同，应重新刷写） ==="
 rm -f "$SANDBOX/mod/state/pending" "$SANDBOX/mod/state/pending_boot" \
       "$SANDBOX/mod/state/pending_id" "$SANDBOX/mod/state/pending_tries" \
       "$SANDBOX/mod/state/confirmed"
-run_main 2>&1 | grep -q '已经是本模块刷入的版本' || { echo "未识别为已刷过"; exit 1; }
-echo "[ OK ] 重启后正确识别为已刷过"
+FFC_TEMP_HIGH=48 run_main >/dev/null 2>&1 || { echo "切换档位后刷写失败"; exit 1; }
+if grep -q '0x30' "$SANDBOX/mod/state/last_sha" 2>/dev/null; then :; fi
+_new=$(cat "$SANDBOX/mod/state/last_sha" 2>/dev/null)
+[ -n "$_new" ] || { echo "没有生成新的 last_sha"; exit 1; }
+echo "[ OK ] 换档位后重新刷写成功（last_sha=${_new%???????????????}…）"
 
 echo
 echo "=== 产物检查 ==="

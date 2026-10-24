@@ -23,7 +23,8 @@ for fn in log die sha256_of file_size pick_workdir detect_slot resolve_partition
           build_runtime_rules verify_dts run_main u32_at put_u32 poke_u32 \
           detect_format parse_dtbo_header split_dtbo_table pack_dtbo_table \
           verify_image boot_epoch gen_token flashed_this_boot align_up hex_at \
-          key_name_from_event read_volume_key set_ffc_high tier_pick tier_desc; do
+          key_name_from_event read_volume_key set_ffc_high tier_pick tier_desc \
+          boot_guard; do
 	if command -v "$fn" >/dev/null 2>&1; then
 		:
 	else
