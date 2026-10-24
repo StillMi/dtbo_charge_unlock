@@ -19,6 +19,13 @@ cp "$MODDIR/restore.sh" "$MODDIR/dump.sh" "$MODDIR/uninstall.sh" "$SANDBOX/mod/"
 cp -r "$MODDIR/ref" "$SANDBOX/mod/"
 cp -r "$MODDIR/bin" "$SANDBOX/mod/"
 
+# 自动化测试里不做音量键询问，否则每次都要干等 10 秒（调用方可以显式覆盖）。
+# 想测某个档位就设 TEST_TIER=safe|max，会往 config.conf 里写 FORCE_TIER。
+export TIER_PROMPT="${TIER_PROMPT:-0}"
+if [ -n "${TEST_TIER:-}" ]; then
+	printf 'FORCE_TIER=%s\n' "$TEST_TIER" >> "$SANDBOX/mod/config.conf"
+fi
+
 # 用主机 dtc 顶替 aarch64 版本
 cp "$DTC_REAL" "$SANDBOX/mod/bin/dtc-aarch64"
 chmod 755 "$SANDBOX/mod/bin/dtc-aarch64"

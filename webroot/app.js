@@ -207,6 +207,7 @@
 
     d.ffcLow  = num(k.cfg_ffc_low);
     d.ffcHigh = num(k.cfg_ffc_high);
+    d.tier    = (k.cfg_tier || '').trim();
 
     /* 模块状态：停用 > 待确认 > 已应用 > 未刷写 */
     if (k.state_halted === '1') {
@@ -306,10 +307,13 @@
   }
 
   /* ---- 温度窗口条 ---- */
+  var TIER_LABEL = { safe: '安全档', max: '极限档', custom: '自定义', ref: '参考表' };
+
   function renderWindow(d) {
     var low = d.ffcLow, high = d.ffcHigh;
     var range = $('windowRange');
     var marker = $('windowMarker');
+    var tier = TIER_LABEL[d.tier] || '';
 
     if (low === null || high === null || high <= low) {
       range.style.left = '0%';
@@ -332,7 +336,8 @@
 
     setText('axisLow',  domLow + '℃');
     setText('axisHigh', domHigh + '℃');
-    setText('windowHint', low + '~' + high + '℃ 全速');
+    setText('windowHint',
+            (tier ? tier + ' · ' : '') + low + '~' + high + '℃ 全速');
 
     var t = d.temp;
     if (t === null) {

@@ -17,6 +17,7 @@ set_perm "$MODPATH/service.sh" 0 0 0755
 set_perm "$MODPATH/action.sh" 0 0 0755
 set_perm "$MODPATH/restore.sh" 0 0 0755
 set_perm "$MODPATH/dump.sh" 0 0 0755
+set_perm "$MODPATH/monitor.sh" 0 0 0755
 set_perm "$MODPATH/uninstall.sh" 0 0 0755
 
 mkdir -p "$MODPATH/state" "$MODPATH/backup" "$MODPATH/logs"
@@ -40,6 +41,12 @@ ui_print "=============================================="
 ui_print " DTBO 有线充电限制解锁 — 安装阶段执行"
 ui_print "=============================================="
 
+# ---------------------------------------------------------------------------
+# 选档位（音量键）：结果写回 config.conf，之后开机重刷 / OTA 重应用都沿用
+# ---------------------------------------------------------------------------
+tier_pick
+
+ui_print ""
 run_main
 RC=$?
 
@@ -49,13 +56,18 @@ ui_print "----------------------------------------------"
 if [ "$RC" -eq 0 ]; then
 	if [ -f "$MODPATH/state/last_sha" ]; then
 		ui_print "- 刷写成功，重启后生效"
+		ui_print "  温度档位: $(tier_desc)"
 		ui_print "  已刷入 sha256: $(cat "$MODPATH/state/last_sha")"
 		ui_print "  原始镜像备份: $(cat "$MODPATH/state/backup" 2>/dev/null)"
 		ui_print "- 刷入后的首次开机会自动确认能否正常启动；"
 		ui_print "  若连续 3 次开机都起不来，会自动回滚原始 dtbo 并停用本模块。"
+		ui_print "- 提醒: 系统层温控优先级高于 dtbo，"
+		ui_print "  需要先在 Scene 里把温控等级改成「丧心病狂」，否则可能看不到提速。"
 	else
 		ui_print "- 流程完成（未写分区）"
-		ui_print "  如果 config.conf 里设了 DRY_RUN=1，这是演练模式。"
+		if [ "$DRY_RUN" = "1" ]; then
+			ui_print "  config.conf 里设了 DRY_RUN=1，这是演练模式。"
+		fi
 	fi
 else
 	ui_print "- 安装阶段刷写未完成（见上方日志）"

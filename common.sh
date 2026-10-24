@@ -5,7 +5,8 @@
 # 流程:
 #   1) 识别当前系统所在 A/B 槽位
 #   2) 读取当前槽位的 dtbo 分区镜像，用内置 dtc 解包成 dts
-#   3) 用 ref/patch.sed 改写有线充电限制（0~56℃ 全速），并关闭 mca_charger_thermal
+#   3) 用 ref/patch.sed 改写有线充电限制（安全档 0~48℃ / 极限档 0~56℃ 全速），
+#      并关闭 mca_charger_thermal
 #   4) 重新打包成 dtbo 镜像，多重复核后刷回该槽位的 dtbo 分区
 #
 # 依赖: 只用设备自带的基础命令（sed/grep/cut/dd/od/cmp/sha256sum），
@@ -39,6 +40,10 @@ DRY_RUN=0
 FORCE_SLOT=
 # 安装阶段刷写失败时是否中止安装：0=继续安装（下次开机再试），1=直接中止
 ABORT_ON_INSTALL_FAIL=0
+# 安装时跳过音量键选档、强制指定档位：留空=按键选；safe=0~48℃；max=0~56℃
+FORCE_TIER=
+# 安装时是否用音量键询问档位；1=询问（默认），0=不问（自动化测试用）
+TIER_PROMPT="${TIER_PROMPT:-1}"
 
 [ -f "$MODDIR/config.conf" ] && . "$MODDIR/config.conf"
 
@@ -623,6 +628,110 @@ verify_image() {
 # 一次要吃掉三份，能省一份是一份。
 read_partition_sha() {
 	dd if="$PART" bs=1048576 2>/dev/null | sha256sum 2>/dev/null | cut -d' ' -f1
+}
+
+# ------------------------------------------------------- 安装时选择温度档位 ---
+# 安装阶段用音量键选：音量下 = 安全档 0~48℃，音量上 = 极限档 0~56℃。
+# 选择结果直接改写 config.conf 的 FFC_TEMP_HIGH，作为唯一事实来源 ——
+# 这样开机重刷、OTA 后自动重应用都会沿用同一档位，不会两边对不上。
+TIER_SAFE_HIGH=48
+TIER_MAX_HIGH=56
+
+# 从 getevent -l 的一行输出里认出音量键。输出 volumeup / volumedown / none
+key_name_from_event() {
+	while IFS= read -r _line; do
+		case "$_line" in
+			*KEY_VOLUMEDOWN*) echo volumedown; return 0 ;;
+			*KEY_VOLUMEUP*)   echo volumeup;   return 0 ;;
+		esac
+	done
+	echo none
+}
+
+# 等一次音量键。没有 getevent / timeout / 权限都返回 none，绝不卡住流程。
+read_volume_key() {
+	_secs="${1:-10}"
+	command -v getevent >/dev/null 2>&1 || { echo none; return 0; }
+	command -v timeout  >/dev/null 2>&1 || { echo none; return 0; }
+	timeout "$_secs" getevent -ql 2>/dev/null | key_name_from_event
+}
+
+# 把高温边界写回 config.conf
+set_ffc_high() {
+	[ -f "$MODDIR/config.conf" ] || return 1
+	if grep -q '^FFC_TEMP_HIGH=' "$MODDIR/config.conf" 2>/dev/null; then
+		sed -i "s|^FFC_TEMP_HIGH=.*|FFC_TEMP_HIGH=$1|" "$MODDIR/config.conf"
+	else
+		printf 'FFC_TEMP_HIGH=%s\n' "$1" >> "$MODDIR/config.conf"
+	fi
+}
+
+# 安装时选档位。成功返回 0；写配置失败返回 1（调用方决定是否中止）
+tier_pick() {
+	case "$FORCE_TIER" in
+		safe|max)
+			log "config.conf 指定了 FORCE_TIER=$FORCE_TIER，跳过按键选择"
+			_tier="$FORCE_TIER"
+			;;
+		"")
+			if [ "$TIER_PROMPT" = "1" ]; then
+				log "----------------------------------------------"
+				log " 选择充电温度档位（10 秒内按音量键）"
+				log "   音量下键 -> 安全档 0~${TIER_SAFE_HIGH}℃ 全速"
+				log "   音量上键 -> 极限档 0~${TIER_MAX_HIGH}℃ 全速"
+				log "   不按     -> 保持 config.conf 当前值"
+				log "等待按键…"
+				_key=$(read_volume_key 10)
+				log "按键结果: $_key"
+				case "$_key" in
+					volumedown) _tier=safe ;;
+					volumeup)   _tier=max ;;
+					*)          _tier=keep ;;
+				esac
+			else
+				_tier=keep
+			fi
+			;;
+		*)
+			log "FORCE_TIER=$FORCE_TIER 无法识别（只支持 safe / max），保持当前设置"
+			_tier=keep
+			;;
+	esac
+
+	case "$_tier" in
+		safe)
+			if set_ffc_high "$TIER_SAFE_HIGH"; then
+				FFC_TEMP_HIGH="$TIER_SAFE_HIGH"
+				log "已选【安全档】：0~${TIER_SAFE_HIGH}℃ 全速"
+			else
+				log "无法写入 config.conf，安全档未生效"
+				return 1
+			fi
+			;;
+		max)
+			if set_ffc_high "$TIER_MAX_HIGH"; then
+				FFC_TEMP_HIGH="$TIER_MAX_HIGH"
+				log "已选【极限档】：0~${TIER_MAX_HIGH}℃ 全速"
+			else
+				log "无法写入 config.conf，极限档未生效"
+				return 1
+			fi
+			;;
+		*)
+			log "使用 config.conf 当前设置：FFC_TEMP_HIGH=${FFC_TEMP_HIGH:-（空，沿用参考表 ${FFC_REF_HIGH}）}"
+			;;
+	esac
+	return 0
+}
+
+# 一句话描述当前档位（从 FFC_TEMP_HIGH 反推，用于安装总结/日志）
+tier_desc() {
+	case "$FFC_TEMP_HIGH" in
+		48) echo "安全档 0~48℃ 全速" ;;
+		56) echo "极限档 0~56℃ 全速" ;;
+		"") echo "参考表原始值（0~${FFC_REF_HIGH}℃ 全速）" ;;
+		*)  echo "自定义 0~${FFC_TEMP_HIGH}℃ 全速" ;;
+	esac
 }
 
 # --------------------------------------------------- 生成运行时改写/校验集 --

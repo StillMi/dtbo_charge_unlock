@@ -17,12 +17,35 @@
 > 且语义一致，再改 `ref/patch.list` 用 `gen_ref.py` / `gen_sed.py` 重新生成规则。
 > 动手前务必备份原分区。
 
+> [!IMPORTANT]
+> ## 装之前先改系统温控，否则改了也白改
+>
+> 这个模块只改 `dtbo` 里的**充电 IC 自己的温度限制**（JEITA 分段表 +
+> `mca_charger_thermal` 节点）。**系统层还有一套温控**（Qualcomm thermal HAL /
+> 各家 thermal-engine），它会按整机温度、壳温、SoC 温度去压充电电流，
+> 优先级在 `dtbo` 之上。
+>
+> 所以：**不先处理系统温控，刷完这个模块充电速度可能一点变化都没有**，
+> 尤其是在室温偏高或边充边用的时候。
+>
+> 正确做法（按顺序）：
+>
+> 1. 先装 [Scene](https://github.com/helloklf/vtools)（第三方工具，非本项目提供）；
+> 2. 在 Scene 里把**温控等级改为「丧心病狂」**（不同版本可能在
+>    「性能 / 温控」或「充电」相关页面里）；
+> 3. 再装本模块、重启。
+>
+> 「丧心病狂」等于基本关掉系统温控限流。**这会显著增加发热和电池风险**，
+> 边充边玩、车里暴晒、捂着手机充电这些场景请自己注意。
+> 只想稳妥一点的话，安装时选**安全档**（音量下键，0~48℃ 全速）。
+
 **在安装过程中**就直接完成「提取 → 解包 → 改写 → 打包 → 校验 → 刷入」，
 装完重启即生效，不需要等开机再跑。
 
 它对**当前系统所在槽位**的 `dtbo` 分区做三件事：
 
-* 把有线充电的 JEITA / 温度分段表改成目标值，使 **0~56 ℃ 区间全程全速充电**；
+* 把有线充电的 JEITA / 温度分段表改成目标值，使 **0~48 ℃（安全档）或
+  0~56 ℃（极限档）区间全程全速充电**，安装时用音量键选；
 * 把 `mca_charger_thermal` 节点置为 `status = "disabled"`，不再因整机温度限制充电功率；
 * 只动有线充电相关节点，无线充电、电池模型等节点保持原样。
 
@@ -72,9 +95,38 @@
 
 ## 二、安装与使用
 
-1. 用 KernelSU（或 Magisk）安装 `dtbo_charge_unlock-v1.5.0.zip`。
+1. **先按上面那节把 Scene 温控改成「丧心病狂」**，否则装了也不一定有效。
+2. 用 KernelSU（或 Magisk）安装 `dtbo_charge_unlock-v1.6.0.zip`。
    **安装过程中就会刷写**，安装界面能看到完整过程与结果。
-2. 安装完成 → 重启手机 → 新 `dtbo` 生效。
+3. 安装过程中会让你选档位（见下），选完继续。
+4. 安装完成 → 重启手机 → 新 `dtbo` 生效。
+
+### 安装时选档位（音量键）
+
+安装脚本会停下来等 10 秒，让你用音量键选一个温度档位：
+
+| 按键 | 档位 | 全速区间 | 说明 |
+| --- | --- | --- | --- |
+| **音量下** | 安全档 | 0~48 ℃ | 更早开始降功率，发热和电池压力小一些 |
+| **音量上** | 极限档 | 0~56 ℃ | 原来的行为，全速区间最长 |
+| 不按（10 秒后） | 保持现有 | `config.conf` 里的值 | 默认是极限档 0~56 ℃ |
+
+两个档位改的都是同一套 JEITA / `ffc_temp_high` 分段表，区别只是
+**全速段的高温边界**落在 48 还是 56 ℃。48 ℃ 以上两个档位都会开始降功率，
+只是安全档降得更早。
+
+选择结果会**直接写回 `config.conf` 的 `FFC_TEMP_HIGH`**，
+所以之后开机重刷、OTA 后自动重新应用，用的都是同一个档位，
+不会出现「装的时候选了安全档，OTA 一次又变回极限档」。
+
+如果读不到音量键（例如设备没给 `getevent` 权限），会打印一行提示并保持
+`config.conf` 当前设置，安装继续，不会卡住。
+
+不想用按键、想固定档位，就在 `config.conf` 里填 `FORCE_TIER=safe` 或 `max`，
+安装时会跳过按键等待。
+
+> 换档位只能**重新安装**（或用 `FORCE_TIER` + `action.sh` 重跑）才会生效 ——
+> 因为它要改的是分区里的 `dtbo`，不是运行时可调的参数。
 
 想先只看看不写分区，把 `config.conf` 里的 `DRY_RUN` 改成 `1` 再安装，
 安装界面会走到「复核通过」但跳过写入，产物在 `/dev/dtbo_charge_unlock/new.img`。
@@ -95,7 +147,8 @@ su -c "sh /data/adb/modules/dtbo_charge_unlock/action.sh"
 
 * 电量、功率、电流、电压、电池温度
 * 充电状态与供电来源（USB/PD/无线，含握手电压与电流上限）
-* **全速充电温度窗口**：`config.conf` 里的 0~56℃ 目标区间，以及当前温度落在窗口内还是越界
+* **全速充电温度窗口**：`config.conf` 里的目标区间（安全档 0~48℃ / 极限档 0~56℃），
+  以及当前温度落在窗口内还是越界
 * 功率与温度的实时曲线（最近 5 分钟）
 * 电池/充电/PMIC 相关温度区
 * 模块自身状态：是否已应用、上次刷写时间、是否在等开机确认、备份情况
@@ -146,7 +199,8 @@ fastboot flash dtbo backup/dtbo_a_YYYYmmdd-HHMMSS.img
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
 | `FFC_TEMP_LOW` | `0` | 全速充电温度下限（℃） |
-| `FFC_TEMP_HIGH` | `56` | 全速充电温度上限（℃）。设成 `55` 就是完全照抄参考表；留空表示不调整 |
+| `FFC_TEMP_HIGH` | `56` | 全速充电温度上限（℃）。安装时选档会写这里：安全档写 `48`、极限档写 `56`。设成 `55` 就是完全照抄参考表；留空表示不调整 |
+| `FORCE_TIER` | 空 | 固定档位、跳过音量键选择：`safe`（0~48℃）/ `max`（0~56℃）；留空 = 安装时按键选 |
 | `FFC_REF_HIGH` | `55` | 参考表里实际使用的高温边界，用于换算 |
 | `FORCE` | `0` | `1` = 忽略「已刷过」判断，强制重刷 |
 | `DRY_RUN` | `0` | `1` = 只解包/改写/打包/校验，不写分区 |
@@ -211,6 +265,12 @@ dtbo_charge_unlock/
   规则正确不等于取值合适，这台机器上能用也不代表别的机器上能用。
 * `mca_charger_thermal` 被禁用后，整机高温时不再降功率，
   请自行注意散热，尤其是边充边玩、车内暴晒等场景。
+* **本模块管不到系统层温控。** 它只改 `dtbo` 里充电 IC 自己的温度限制；
+  Qualcomm thermal HAL / 厂商 thermal-engine 的限流优先级更高，
+  不把 Scene 的温控等级改成「丧心病狂」，很可能看不到任何提速。
+* 档位只能在**安装时**选（或改 `FORCE_TIER` 后重跑）；它改的是分区里的
+  `dtbo`，不是运行时可调参数。两个档位都只是把全速段的边界往后推，
+  上限仍然是**充电 IC 自己的硬件保护**，那部分改不掉也不该改。
 * 刷入后 `dtbo` 的 sha256 会变；如果系统开启了 dm-verity / AVB 严格校验，
   可能影响 OTA，恢复原镜像即可。
 
@@ -234,7 +294,12 @@ sh tools/test_rollback.sh  . build/part_dtbo.img  /path/to/dtc build/sb_rb
 sh tools/test_edge.sh      . build/part_dtbo.img  /path/to/dtc build/sb_edge
 sh tools/test_module.sh    . build/part_dtbo.img  /path/to/dtc build/sandbox
 
-# 2b) WebUI 采集脚本自测（造一棵假 sysfs，检查每个输出字段）
+# 2b) 档位与音量键
+sh tools/test_key.sh     . build/sb_key          # 事件行解析 + tier_pick 各分支
+sh tools/test_tier.sh    . build/part_dtbo.img /path/to/dtc build/tier
+                         # 两个档位真的写进 dtbo：ffc_temp_high = <0x30> / <0x38>
+
+# 2c) WebUI 采集脚本自测（造一棵假 sysfs，检查每个输出字段）
 sh tools/test_monitor.sh   . build/sb_mon
 
 # 3) 重新生成改写规则（换了参考 dts 才需要）
@@ -242,7 +307,7 @@ python tools/gen_ref.py  <参考.dts> ref
 python tools/gen_sed.py  ref/patch.list ref
 
 # 4) 打包（内置编码检查，有 CRLF / BOM 会直接拒绝）
-python tools/package.py  . dist/dtbo_charge_unlock-v1.5.0.zip
+python tools/package.py  . dist/dtbo_charge_unlock-v1.6.0.zip
 ```
 
 WebUI 的页面逻辑也可以在 PC 上验证，不需要设备。做法是造一个假的 `ksu`
@@ -274,6 +339,8 @@ python tools/webui_scenarios.py . build/wsc "<浏览器路径>" build/monitor_sa
 | `test_edge.sh` | 令牌匹配/不匹配、同一次开机内刷写不计数、校验器正反两向、`FORCE_SLOT` |
 | `test_module.sh` | DTBO 表（3 条目 / 单条目 / 混合板型 / **大端+紧凑布局**）、裸 DTB 单段与双段、已刷过跳过、演练模式、A/B 与单分区槽位 |
 | `test_monitor.sh` | WebUI 采集脚本：电池/电源/温度区字段、模块状态四态、无电池节点时降级 |
+| `test_key.sh` | 音量键解析（按下/抬起/无关事件/多行）与 `tier_pick` 各分支：音量下→48、音量上→56、不按、`FORCE_TIER` 合法/乱填、`TIER_PROMPT=0` |
+| `test_tier.sh` | 逐个档位跑完整安装，再把刷好的分区拆出来反编译，确认 `ffc_temp_high = <0x30>/<0x38>` 与 JEITA 高温边界真的是 48/56，且安全档里不残留 `0x38` |
 
 辅助脚本：
 

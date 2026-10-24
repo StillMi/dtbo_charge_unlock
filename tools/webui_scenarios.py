@@ -132,6 +132,14 @@ def sc_cold(t):
     return t
 
 
+def sc_safe(t):
+    # 安全档：窗口收到 0~48℃，此时 50℃ 已经算越界
+    t = setkv(t, "cfg_ffc_high", "48")
+    t = setkv(t, "cfg_tier", "safe")
+    t = setkv(t, "temp_raw", "500")
+    return t
+
+
 SCENARIOS = [
     ("充电中", sc_charging, {
         "errors": "0", "banner": "hidden",
@@ -150,10 +158,15 @@ SCENARIOS = [
         "errors": "0", "status_has": "已充满", "statusClass_has": "ok",
         "temp": "35.2",
     }),
-    ("电池过热越界", sc_hot, {
+    ("极限档过热越界", sc_hot, {
         "errors": "0", "temp": "61.2",
         "markerClass_has": "out",
-        "windowHint": "0~56℃ 全速",
+        "windowHint": "极限档 · 0~56℃ 全速",
+    }),
+    ("安全档 50℃ 越界", sc_safe, {
+        "errors": "0", "temp": "50.0",
+        "markerClass_has": "out",
+        "windowHint": "安全档 · 0~48℃ 全速",
     }),
     ("电池低于下限", sc_cold, {
         "errors": "0", "temp": "-2.5",

@@ -1,6 +1,6 @@
 id=dtbo_charge_unlock
 name=DTBO 有线充电限制解锁（仅小米 17）
-version=v1.5.0
-versionCode=15000
+version=v1.6.0
+versionCode=16000
 author=StillMi
-description=【仅适用于小米 17（cancún/SM8850），其他机型未测试，请勿直接使用】安装时立即执行：识别 A/B 槽位、提取当前 dtbo 分区（自动识别 DTBO 表大/小端与裸 DTB 三种布局）、解包为 dts、替换有线充电限制表（0~56℃ 全速）、关闭 mca_charger_thermal，重新打包并复核后刷回当前槽位，装完重启即生效。不检查 bootloader 状态（KernelSU 会伪造该属性）。刷前自动备份原镜像，刷后回读校验，连续 3 次开机未确认则自动回滚。系统 OTA 后开机自动重新应用。附带只读 WebUI，可在 KernelSU 里实时查看充电功率、电流、温度与模块状态。
+description=【仅适用于小米 17（cancún/SM8850），其他机型未测试，请勿直接使用】安装时立即执行：识别 A/B 槽位、提取当前 dtbo 分区（自动识别 DTBO 表大/小端与裸 DTB 三种布局）、解包为 dts、改写有线充电限制表（安装时用音量键选档：音量下=安全档 0~48℃ 全速，音量上=极限档 0~56℃ 全速）、关闭 mca_charger_thermal，重新打包并复核后刷回当前槽位，装完重启即生效。注意：模块只改 dtbo 里的充电 IC 温控，系统层温控优先级更高 —— 请先用 Scene 把温控等级改为「丧心病狂」，否则可能看不到提速。不检查 bootloader 状态（KernelSU 会伪造该属性）。刷前自动备份原镜像，刷后回读校验，连续 3 次开机未确认则自动回滚。系统 OTA 后开机自动重新应用。附带只读 WebUI，可在 KernelSU 里实时查看充电功率、电流、温度与模块状态。

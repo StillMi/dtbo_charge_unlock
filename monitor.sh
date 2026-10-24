@@ -143,8 +143,19 @@ fi
 emit backup_count "$(ls -1 "$MODDIR/backup/" 2>/dev/null | grep -c '\.img$')"
 
 # 目标温度窗口（配置里的，不是 dtbo 里的实际值）
-emit cfg_ffc_low       "$(kv "$MODDIR/config.conf" FFC_TEMP_LOW)"
-emit cfg_ffc_high      "$(kv "$MODDIR/config.conf" FFC_TEMP_HIGH)"
+_cfg_low=$(kv "$MODDIR/config.conf" FFC_TEMP_LOW)
+_cfg_high=$(kv "$MODDIR/config.conf" FFC_TEMP_HIGH)
+emit cfg_ffc_low       "$_cfg_low"
+emit cfg_ffc_high      "$_cfg_high"
 emit cfg_dry_run       "$(kv "$MODDIR/config.conf" DRY_RUN)"
+
+# 档位名由温度窗口反推 —— config.conf 是唯一事实来源，
+# 不额外记状态文件，避免两边对不上。
+case "$_cfg_high" in
+	48) emit cfg_tier safe ;;
+	56) emit cfg_tier max ;;
+	"") emit cfg_tier ref ;;
+	*)  emit cfg_tier custom ;;
+esac
 
 exit 0
