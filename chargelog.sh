@@ -8,6 +8,19 @@
 #
 # 只读 /sys，只往自己的日志目录写文件，不碰任何分区、不改任何配置。
 #
+# 采样行格式（v2，逗号分隔 11 列）：
+#   0 epoch            采样时刻
+#   1 capacity         电量 %
+#   2 temp_raw         电池温度原始值（0.1℃，页面负责换算）
+#   3 current_now      电流 uA（带符号）
+#   4 voltage_now      电压 uV
+#   5 charge_counter   累计充入 uAh
+#   6 status           电池状态字符串
+#   7 power_now        功率 uW（节点不存在时为空，页面用 I*V 兜底）
+#   8 usb_vnow         充电器电压 uV
+#   9 usb_imax         充电器限流 uA
+#  10 chg_temp_raw     充电器/主板温度原始值（0.1℃，取第一个非电池温度区）
+#
 # 用法:
 #   sh chargelog.sh start    后台启动（已经在跑就跳过）
 #   sh chargelog.sh stop     停止
@@ -35,34 +48,49 @@ case "$SELF" in
 	*) SELF="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/$(basename "$0")" ;;
 esac
 
-rd() {
+_CR=$(printf '\r')
+
+# 文件第一行 → $_RV（不 fork）
+rv() {
+	_RV=""
 	[ -r "$1" ] || return 0
-	cat "$1" 2>/dev/null | head -n 1 | tr -d '\r'
+	IFS= read -r _RV 2>/dev/null < "$1" || :
+	_RV=${_RV%"$_CR"}
 }
 
+# config.conf 里 key=value 的值 → $_KV（不 fork）
 kv() {
+	_KV=""
 	[ -r "$1" ] || return 0
-	grep "^$2=" "$1" 2>/dev/null | head -n 1 | cut -d= -f2- | tr -d '\r'
+	while IFS= read -r _l || [ -n "$_l" ]; do
+		case "$_l" in
+			"$2="*) _KV=${_l#*=}; _KV=${_KV%"$_CR"}; break ;;
+		esac
+	done < "$1"
 }
 
 CFG="$MODDIR/config.conf"
 
-LOGDIR="${CHARGELOG_DIR:-$(kv "$CFG" CHARGELOG_DIR)}"
+kv "$CFG" CHARGELOG_DIR
+LOGDIR="${CHARGELOG_DIR:-$_KV}"
 [ -n "$LOGDIR" ] || LOGDIR=/data/adb/dtbo_charge_unlock/chargelog
 
-INTERVAL=$(kv "$CFG" CHARGELOG_INTERVAL)
+kv "$CFG" CHARGELOG_INTERVAL
+INTERVAL="$_KV"
 case "$INTERVAL" in
-	''|*[!0-9]*) INTERVAL=30 ;;
+	''|*[!0-9]*) INTERVAL=10 ;;
 esac
 [ "$INTERVAL" -ge 5 ] || INTERVAL=5
 
-MAXN=$(kv "$CFG" CHARGELOG_MAX)
+kv "$CFG" CHARGELOG_MAX
+MAXN="$_KV"
 case "$MAXN" in
 	''|*[!0-9]*) MAXN=40 ;;
 esac
 [ "$MAXN" -ge 1 ] || MAXN=1
 
-ENABLED=$(kv "$CFG" CHARGELOG)
+kv "$CFG" CHARGELOG
+ENABLED="$_KV"
 [ -n "$ENABLED" ] || ENABLED=1
 
 PIDF="$LOGDIR/.pid"
@@ -84,22 +112,43 @@ batt_dir() {
 plugged_in() {
 	_on=0
 	for s in usb ac wireless dc pc_port; do
-		[ "$(rd "$SYS/class/power_supply/$s/online")" = "1" ] && _on=1
+		rv "$SYS/class/power_supply/$s/online"
+		[ "$_RV" = "1" ] && _on=1
 	done
 	if [ "$_on" = "0" ]; then
-		case "$(rd "$(batt_dir)/status")" in
+		rv "$(batt_dir)/status"
+		case "$_RV" in
 			Charging|Full) _on=1 ;;
 		esac
 	fi
 	printf '%s' "$_on"
 }
 
+# 第一个非电池的充电相关温度区（充电器 / 主板），取不到就留空
+chg_temp() {
+	for z in "$SYS"/class/thermal/thermal_zone*; do
+		[ -d "$z" ] || continue
+		rv "$z/type"
+		case "$_RV" in
+			*batt*|*BATT*|'') continue ;;
+		esac
+		rv "$z/temp"
+		if [ -n "$_RV" ]; then
+			printf '%s' "$_RV"
+			return 0
+		fi
+	done
+	printf ''
+}
+
 # --------------------------------------------------------------- 会话文件 ---
 
 # 只保留最近 MAXN 个会话
 prune() {
-	_cnt=$(ls -1 "$LOGDIR"/*.log 2>/dev/null | wc -l | tr -d ' \t\r\n')
-	case "$_cnt" in ''|*[!0-9]*) return 0 ;; esac
+	_cnt=0
+	for _f in "$LOGDIR"/*.log; do
+		[ -f "$_f" ] && _cnt=$((_cnt + 1))
+	done
 	[ "$_cnt" -le "$MAXN" ] && return 0
 	ls -1t "$LOGDIR"/*.log 2>/dev/null \
 		| tail -n "+$((MAXN + 1))" \
@@ -112,19 +161,21 @@ begin_session() {
 	_name=$(date '+%Y%m%d-%H%M%S').log
 	_f="$LOGDIR/$_name"
 	{
-		printf '#dtbo-chargelog v1\n'
+		printf '#dtbo-chargelog v2\n'
 		printf '#start=%s\n' "$(date +%s)"
 	} > "$_f" 2>/dev/null || return 1
 	printf '%s\n' "$_name" > "$CURF"
 	prune
 }
 
+# append_sample <cap> <temp> <cur> <volt> <counter> <status> <power> <usbv> <usbi> <chgtemp>
 append_sample() {
 	[ -f "$CURF" ] || return 0
 	_name=$(cat "$CURF" 2>/dev/null)
 	[ -n "$_name" ] || return 0
-	printf '%s,%s,%s,%s,%s,%s,%s\n' \
+	printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
 		"$(date +%s)" "$1" "$2" "$3" "$4" "$5" "$6" \
+		"$7" "$8" "$9" "${10}" \
 		>> "$LOGDIR/$_name" 2>/dev/null
 }
 
@@ -156,13 +207,20 @@ step() {
 	if [ "$(plugged_in)" = "1" ]; then
 		[ -f "$CURF" ] || begin_session
 		_b=$(batt_dir)
-		append_sample \
-			"$(rd "$_b/capacity")" \
-			"$(rd "$_b/temp")" \
-			"$(rd "$_b/current_now")" \
-			"$(rd "$_b/voltage_now")" \
-			"$(rd "$_b/charge_counter")" \
-			"$(rd "$_b/status")"
+
+		rv "$_b/capacity";       _cap="$_RV"
+		rv "$_b/temp";           _tmp="$_RV"
+		rv "$_b/current_now";    _cur="$_RV"
+		rv "$_b/voltage_now";    _vol="$_RV"
+		rv "$_b/charge_counter"; _cnt="$_RV"
+		rv "$_b/status";         _sts="$_RV"
+		rv "$_b/power_now";      _pow="$_RV"
+		rv "$SYS/class/power_supply/usb/voltage_now"; _uv="$_RV"
+		rv "$SYS/class/power_supply/usb/current_max"; _ui="$_RV"
+		_ct=$(chg_temp)
+
+		append_sample "$_cap" "$_tmp" "$_cur" "$_vol" "$_cnt" "$_sts" \
+			"$_pow" "$_uv" "$_ui" "$_ct"
 	else
 		end_session
 	fi

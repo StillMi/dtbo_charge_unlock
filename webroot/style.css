@@ -511,9 +511,8 @@ button#btnApply:disabled { opacity: .55; pointer-events: none; }
   align-items: center;
   justify-content: center;
   padding: 22px;
-  background: rgba(0, 0, 0, .62);
-  -webkit-backdrop-filter: blur(2px);
-  backdrop-filter: blur(2px);
+  background: rgba(0, 0, 0, .68);
+  /* 不用 backdrop-filter：手机 GPU 上模糊一层遮罩会让点击明显迟滞 */
 }
 
 .modal.hidden { display: none; }
@@ -690,7 +689,9 @@ button#btnApply:disabled { opacity: .55; pointer-events: none; }
   cursor: default;
 }
 
-#logDetail .chart-box + .chart-box { margin-top: 4px; }
+#logDetail .chart-box + .chart-box { margin-top: 12px; }
+#logDetail .kvlist { margin-bottom: 14px; }
+#logDetail .kvlist dt { flex: 0 0 84px; }
 
 /* ------------------------------------------------------------------ 页脚 --- */
 footer {

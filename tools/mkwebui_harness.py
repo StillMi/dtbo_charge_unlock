@@ -158,8 +158,8 @@ font:11px/1.55 monospace;white-space:pre-wrap">check 未运行</pre>
         document.getElementById('confirm').classList.contains('hidden'),
         document.getElementById('confirm').className);
 
-    chk('原始数据已填', txt('rawDump').indexOf('capacity=') >= 0,
-        (txt('rawDump').split('\\n').length) + ' 行');
+    chk('展开后原始数据已填', (window.__raw || {}).opened === true,
+        'len=' + ((window.__raw || {}).len));
 
     /* ---- 充电日志标签页 ---- */
     var L = window.__log || {};
@@ -169,11 +169,22 @@ font:11px/1.55 monospace;white-space:pre-wrap">check 未运行</pre>
     chk('日志采样间隔已填', /^\\d+$/.test(L.intv || ''), L.intv);
     chk('记录中不显示启动按钮', L.startHidden === true, 'hidden=' + L.startHidden);
     chk('日志列表有行', (L.rows || 0) >= 2, 'rows=' + L.rows);
+    chk('列表显示峰值功率', /峰值 \\d/.test(L.listSub || ''), L.listSub);
     chk('打开会话', L.opened === true && L.title !== '—', L.title);
-    chk('会话统计已填', (L.stats || 0) >= 8, 'rows=' + L.stats);
-    chk('会话曲线已绘制', (L.painted || 0) > 100, 'pixels=' + L.painted);
+    chk('会话统计已填', (L.stats || 0) >= 9, 'rows=' + L.stats);
+    chk('会话含平均功率', /平均功率/.test(L.statsText || ''), '');
+    chk('会话含充电器温度', /充电器/.test(L.statsText || ''), '');
+    chk('会话含采样间隔', /秒一点/.test(L.statsText || ''), '');
+    chk('功率曲线已绘制', (L.painted || 0) > 100, 'pixels=' + L.painted);
+    chk('电压曲线已绘制', (L.paintedV || 0) > 100, 'pixels=' + L.paintedV);
+    chk('电流曲线已绘制', (L.paintedC || 0) > 100, 'pixels=' + L.paintedC);
+    chk('温度曲线已绘制', (L.paintedT || 0) > 100, 'pixels=' + L.paintedT);
     chk('会话峰值已填', /^\\d/.test(L.peaks || ''), L.peaks);
     chk('返回列表', L.back === true, 'back=' + L.back);
+
+    /* ---- 性能：重复采集不该重建 DOM ---- */
+    chk('温度列表不重建节点', L.thermalSame === true, 'same=' + L.thermalSame);
+    chk('折叠时不生成原始数据', L.rawKept === true, 'len=' + L.rawLen);
 
     var doc = document.documentElement;
     chk('无横向溢出', doc.scrollWidth <= window.innerWidth + 1,
@@ -198,6 +209,25 @@ font:11px/1.55 monospace;white-space:pre-wrap">check 未运行</pre>
   }
 
   setTimeout(run, 12000);
+})();
+</script>
+"""
+
+# 原始数据折叠时才省性能：展开一次确认它会填，然后再折回去
+RAW = """<script>
+(function () {
+  var R = window.__raw = { opened: false, len: 0, closed: false };
+  setTimeout(function () {
+    var det = document.getElementById('rawDump').parentNode;
+    det.open = true;
+    setTimeout(function () {
+      var raw = document.getElementById('rawDump');
+      R.len = (raw.textContent || '').length;
+      R.opened = (raw.textContent || '').indexOf('capacity=') >= 0;
+      det.open = false;
+      R.closed = true;
+    }, 2600);
+  }, 3200);
 })();
 </script>
 """
@@ -234,8 +264,10 @@ TABS = """<script>
 (function () {
   var L = window.__log = { tabs: 0, switched: false, chip: '', rows: 0,
                            opened: false, title: '', stats: 0, painted: 0,
-                           peaks: '', back: false, done: false,
-                           intv: '', startHidden: false };
+                           paintedV: 0, paintedC: 0, paintedT: 0,
+                           peaks: '', back: false, done: false, listSub: '',
+                           statsText: '', intv: '', startHidden: false,
+                           thermalSame: false, rawKept: false, rawLen: 0 };
 
   function txt(id) {
     var e = document.getElementById(id);
@@ -275,6 +307,7 @@ TABS = """<script>
       L.startHidden = hidden('logStartBox');
       var ul = document.getElementById('logList');
       L.rows = ul ? ul.children.length : 0;
+      L.listSub = (ul && ul.children[0]) ? txt2(ul.children[0]) : '';
 
       var first = ul && ul.children[0];
       if (!first || first.className === 'empty') return;
@@ -285,18 +318,51 @@ TABS = """<script>
         L.title = txt('logTitle');
         var st = document.getElementById('logStats');
         L.stats = st ? st.children.length : 0;
-        L.painted = painted(document.getElementById('logChartPower'));
-        L.peaks = txt('logPowerPeak') + '/' + txt('logTempPeak');
+        L.statsText = st ? (st.textContent || '') : '';
+        L.painted  = painted(document.getElementById('logChartPower'));
+        L.paintedV = painted(document.getElementById('logChartVolt'));
+        L.paintedC = painted(document.getElementById('logChartCur'));
+        L.paintedT = painted(document.getElementById('logChartTemp'));
+        L.peaks = txt('logPowerPeak') + '/' + txt('logVoltPeak') + '/'
+                + txt('logCurPeak') + '/' + txt('logTempPeak');
 
         document.getElementById('btnLogBack').click();
 
         setTimeout(function () {
           L.back = hidden('logDetail');
           if (liveBtn) liveBtn.click();
-          setTimeout(function () { L.done = true; }, 300);
+          setTimeout(checkPerf, 300);
         }, 500);
       }, 600);
     }, 700);
+  }
+
+  function txt2(el) { return el ? (el.textContent || '').trim() : ''; }
+
+  /* 性能断言：连续两次采集后，温度列表的节点还是同一批（没有重建），
+     折叠的原始数据也没被反复重写。 */
+  function checkPerf() {
+    var ul = document.getElementById('thermalList');
+    var raw = document.getElementById('rawDump');
+    var before = ul ? ul.children[0] : null;
+    L.rawLen = raw ? (raw.textContent || '').length : -1;
+
+    var rawWrites = 0;
+    if (window.MutationObserver && raw) {
+      var mo = new MutationObserver(function (recs) { rawWrites += recs.length; });
+      mo.observe(raw, { childList: true, characterData: true, subtree: true });
+      window.__mo = mo;
+    }
+
+    /* 采集间隔 2 秒，等 2.6 秒至少跨过一次轮询 */
+    setTimeout(function () {
+      if (window.__mo) window.__mo.disconnect();
+      var after = ul ? ul.children[0] : null;
+      L.thermalSame = (before === after) && before !== null;
+      L.rawWrites = rawWrites;
+      L.rawKept = (rawWrites === 0);
+      L.done = true;
+    }, 2600);
   }
 
   setTimeout(step1, 6500);
@@ -309,21 +375,26 @@ def fake_fixtures(now):
     """造两份假数据：monitor.sh --logs 的会话列表、--log 的采样点。"""
     import time as _t
 
+    # (start, end, aborted, samples, cap0, cap1, tmax, pmax_mw, imax_ua, vmax_uv)
     specs = [
-        (now - 3 * 86400, now - 3 * 86400 + 3900, 0, 78, 31, 58, 342),
-        (now - 2 * 86400, now - 2 * 86400 + 5400, 0, 108, 22, 74, 361),
-        (now - 7200,      None,                   0, 24, 55, 64, 348),
+        (now - 3 * 86400, now - 3 * 86400 + 3900, 0, 78, 31, 58, 342,
+         68400, 3200000, 9240000),
+        (now - 2 * 86400, now - 2 * 86400 + 5400, 0, 108, 22, 74, 361,
+         71200, 3350000, 9280000),
+        (now - 7200,      None,                   0, 24, 55, 64, 348,
+         65100, 3100000, 9200000),
     ]
 
     def name_of(st):
         return _t.strftime("%Y%m%d-%H%M%S", _t.localtime(st)) + ".log"
 
     rows = ["log_dir=/data/adb/dtbo_charge_unlock/chargelog",
-            "log_interval=30",
+            "log_interval=10",
             "log_count=%d" % len(specs),
             "log_current=" + name_of(specs[2][0]),
             "log_running=1"]
-    for i, (st, en, ab, sm, c0, c1, tmax) in enumerate(specs):
+    for i, sp in enumerate(specs):
+        st, en, ab, sm, c0, c1, tmax, pmw, imax, vmax = sp
         rows += [
             "log.%d.name=%s" % (i, name_of(st)),
             "log.%d.start=%d" % (i, st),
@@ -333,10 +404,15 @@ def fake_fixtures(now):
             "log.%d.cap0=%d" % (i, c0),
             "log.%d.cap1=%d" % (i, c1),
             "log.%d.temp_max=%d" % (i, tmax),
+            "log.%d.pmax_mw=%d" % (i, pmw),
+            "log.%d.cur_max=%d" % (i, imax),
+            "log.%d.volt_max=%d" % (i, vmax),
+            "log.%d.cnt0=2600000" % i,
+            "log.%d.cnt1=%d" % (i, 2600000 + sm * 20000),
         ]
     rows.append("log.list_count=%d" % len(specs))
 
-    st, en, ab, sm, c0, c1, tmax = specs[0]
+    st, en, ab, sm, c0, c1, tmax, pmw, imax, vmax = specs[0]
     pts = 60
     srows = ["session.name=" + name_of(st),
              "session.start=%d" % st,
@@ -349,8 +425,14 @@ def fake_fixtures(now):
         cur = int(round(2400000 + 900000 * (0.5 + 0.5 * ((i * 7) % 13) / 12.0)))
         volt = int(round(4050000 + 120000 * frac))
         cnt = int(round(2600000 + 1500000 * frac))
-        srows.append("session.s.%d=%d,%d,%d,%d,%d,%d,Charging"
-                     % (i, st + i * 30, cap, temp, cur, volt, cnt))
+        pw = int(round(abs(cur) / 1e6 * volt))
+        uv = int(round(9000000 + 60000 * frac))
+        ui = int(round(3000000 + 100000 * frac))
+        chg = int(round(370 + 25 * frac))
+        # 11 列 v2 格式
+        srows.append("session.s.%d=%d,%d,%d,%d,%d,%d,Charging,%d,%d,%d,%d"
+                     % (i, st + i * 10, cap, temp, cur, volt, cnt,
+                        pw, uv, ui, chg))
     srows.append("session.count=%d" % pts)
 
     return "\n".join(rows) + "\n", "\n".join(srows) + "\n"
@@ -379,7 +461,7 @@ def main():
 
     html = html.replace('<script src="app.js"></script>',
                         STUB % (json.dumps(base), json.dumps(logs), json.dumps(sess)) +
-                        '<script src="app.js"></script>' + ERRBOX + APPLY + TABS)
+                        '<script src="app.js"></script>' + ERRBOX + RAW + APPLY + TABS)
 
     with open(index, "w", encoding="utf-8", newline="\n") as fh:
         fh.write(html)

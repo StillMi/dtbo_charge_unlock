@@ -38,10 +38,19 @@ w "$PS/battery/temp" 352
 w "$PS/battery/current_now" 2800000
 w "$PS/battery/voltage_now" 4100000
 w "$PS/battery/charge_counter" 3150000
+w "$PS/battery/power_now" 11480000
 w "$PS/usb/online" 0
+w "$PS/usb/voltage_now" 9000000
+w "$PS/usb/current_max" 3000000
 w "$PS/ac/online" 0
 w "$PS/wireless/online" 0
 w "$PS/dc/online" 0
+
+# 一个电池温度区 + 一个充电器温度区（后者进第 11 列）
+w "$SYS/class/thermal/thermal_zone0/type" "battery"
+w "$SYS/class/thermal/thermal_zone0/temp" 352
+w "$SYS/class/thermal/thermal_zone1/type" "charger_therm0"
+w "$SYS/class/thermal/thermal_zone1/temp" 418
 
 # ------------------------------------------------------- 假模块目录 ---
 mkdir -p "$MOD/state"
@@ -93,15 +102,17 @@ case "$_cur" in
 	*) bad "文件名不对: $_cur" ;;
 esac
 
-[ "$(head -n 1 "$F")" = "#dtbo-chargelog v1" ] \
-	&& ok "首行版本标记" || bad "首行不是版本标记"
+[ "$(head -n 1 "$F")" = "#dtbo-chargelog v2" ] \
+	&& ok "首行版本标记 v2" || bad "首行不是 v2 版本标记（$(head -n 1 "$F")）"
 [ "$(grep -c '^#start=' "$F")" = "1" ] \
 	&& ok "有 #start" || bad "缺 #start"
 [ "$(samples "$F")" = "1" ] \
 	&& ok "第一次采样 1 行" || bad "第一次采样行数不对（$(samples "$F")）"
 
-echo "== 采样行字段 =="
+echo "== 采样行字段（11 列） =="
 _line=$(grep -v '^#' "$F" | head -n 1)
+_nf=$(printf '%s' "$_line" | awk -F, '{print NF}')
+[ "$_nf" = "11" ] && ok "共 11 列" || bad "列数 $_nf（应为 11）"
 [ "$(printf '%s' "$_line" | cut -d, -f2)" = "73" ] \
 	&& ok "电量 73" || bad "电量字段 [$(printf '%s' "$_line" | cut -d, -f2)]"
 [ "$(printf '%s' "$_line" | cut -d, -f3)" = "352" ] \
@@ -114,6 +125,14 @@ _line=$(grep -v '^#' "$F" | head -n 1)
 	&& ok "charge_counter" || bad "计数字段 [$(printf '%s' "$_line" | cut -d, -f6)]"
 [ "$(printf '%s' "$_line" | cut -d, -f7)" = "Charging" ] \
 	&& ok "状态字段" || bad "状态字段 [$(printf '%s' "$_line" | cut -d, -f7)]"
+[ "$(printf '%s' "$_line" | cut -d, -f8)" = "11480000" ] \
+	&& ok "power_now 记录下来了" || bad "功率字段 [$(printf '%s' "$_line" | cut -d, -f8)]"
+[ "$(printf '%s' "$_line" | cut -d, -f9)" = "9000000" ] \
+	&& ok "充电器电压" || bad "usb 电压字段 [$(printf '%s' "$_line" | cut -d, -f9)]"
+[ "$(printf '%s' "$_line" | cut -d, -f10)" = "3000000" ] \
+	&& ok "充电器限流" || bad "usb 限流字段 [$(printf '%s' "$_line" | cut -d, -f10)]"
+[ "$(printf '%s' "$_line" | cut -d, -f11)" = "418" ] \
+	&& ok "充电器温度（非电池温度区）" || bad "充电器温度字段 [$(printf '%s' "$_line" | cut -d, -f11)]"
 _epoch=$(printf '%s' "$_line" | cut -d, -f1)
 case "$_epoch" in
 	''|*[!0-9]*) bad "时间戳不是纯数字 [$_epoch]" ;;
@@ -200,6 +219,15 @@ _v=$(grep "^log\.$_nm\.aborted=" "$OUT" | cut -d= -f2-)
 [ "$_v" = "0" ] && ok "正常会话 aborted=0" || bad "aborted [$_v]"
 _v=$(grep "^log\.$_nm\.temp_max=" "$OUT" | cut -d= -f2-)
 [ "$_v" = "352" ] && ok "temp_max 352" || bad "temp_max [$_v]"
+# power_now 是 11480000 uW = 11480 mW
+_v=$(grep "^log\.$_nm\.pmax_mw=" "$OUT" | cut -d= -f2-)
+[ "$_v" = "11480" ] && ok "pmax_mw 11480（由 power_now 换算）" || bad "pmax_mw [$_v]"
+_v=$(grep "^log\.$_nm\.cur_max=" "$OUT" | cut -d= -f2-)
+[ "$_v" = "2800000" ] && ok "cur_max 取到最大值" || bad "cur_max [$_v]"
+_v=$(grep "^log\.$_nm\.volt_max=" "$OUT" | cut -d= -f2-)
+[ "$_v" = "4100000" ] && ok "volt_max 取到最大值" || bad "volt_max [$_v]"
+_v=$(grep "^log\.$_nm\.cnt0=" "$OUT" | cut -d= -f2-)
+[ "$_v" = "3150000" ] && ok "cnt0 是首点计数" || bad "cnt0 [$_v]"
 
 echo "== monitor.sh --log <会话> =="
 OUT2="$SB/session.txt"

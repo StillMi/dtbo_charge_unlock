@@ -62,15 +62,19 @@
     return (typeof ksu !== 'undefined') && ksu && (typeof ksu.exec === 'function');
   }
 
+  var dirCache = '';
+
   function moduleDir() {
+    if (dirCache) return dirCache;
     try {
       if (hasKsu() && typeof ksu.moduleInfo === 'function') {
         var info = ksu.moduleInfo();
         if (typeof info === 'string') info = JSON.parse(info);
-        if (info && info.id) return '/data/adb/modules/' + info.id;
+        if (info && info.id) { dirCache = '/data/adb/modules/' + info.id; return dirCache; }
       }
     } catch (e) { /* 接口不存在或返回格式不同，走兜底 */ }
-    return MODULE_DIR_FALLBACK;
+    dirCache = MODULE_DIR_FALLBACK;
+    return dirCache;
   }
 
   var cbSeq = 0;
@@ -91,9 +95,11 @@
       }
       var name = '__ksu_cb_' + Date.now() + '_' + (cbSeq++);
       var settled = false;
+      var tmr = null;
 
       window[name] = function (errno, stdout, stderr) {
         settled = true;
+        if (tmr) { clearTimeout(tmr); tmr = null; }
         try { delete window[name]; } catch (e) { window[name] = undefined; }
         resolve({ errno: errno, stdout: stdout || '', stderr: stderr || '' });
       };
@@ -106,8 +112,9 @@
         return;
       }
 
-      setTimeout(function () {
+      tmr = setTimeout(function () {
         if (settled) return;
+        tmr = null;
         try { delete window[name]; } catch (e) {}
         reject(new Error('执行超时（' + Math.round(limit / 1000) + ' 秒）'));
       }, limit);
@@ -249,14 +256,20 @@
 
   function setText(id, s) {
     var el = $(id);
-    if (el) el.textContent = s;
+    if (!el) return;
+    /* 只有真的变了才写 DOM：每 2 秒全量赋值会让页面反复重排，点起来发卡 */
+    if (el.textContent !== s) el.textContent = s;
   }
 
   function banner(html, kind) {
     var b = $('banner');
-    if (!html) { b.className = 'banner hidden'; b.innerHTML = ''; return; }
-    b.className = 'banner ' + (kind || 'warn');
-    b.innerHTML = html;
+    if (!html) {
+      if (b.className !== 'banner hidden') { b.className = 'banner hidden'; b.innerHTML = ''; }
+      return;
+    }
+    var cls = 'banner ' + (kind || 'warn');
+    if (b.className !== cls) b.className = cls;
+    if (b.innerHTML !== html) b.innerHTML = html;
   }
 
   function render(k, d) {
@@ -268,11 +281,14 @@
     if (cap !== null) {
       setText('capValue', String(Math.round(cap)));
       var frac = Math.max(0, Math.min(100, cap)) / 100;
-      ring.style.strokeDashoffset = String(326.73 * (1 - frac));
-      ring.style.stroke = cap <= 15 ? '#f85149' : (d.charging ? '#3fb950' : '#58a6ff');
+      var off = String(326.73 * (1 - frac));
+      var col = cap <= 15 ? '#f85149' : (d.charging ? '#3fb950' : '#58a6ff');
+      /* 只在变化时写，避免每 2 秒触发一次 SVG 重绘 */
+      if (ring.style.strokeDashoffset !== off) ring.style.strokeDashoffset = off;
+      if (ring.style.stroke !== col) ring.style.stroke = col;
     } else {
       setText('capValue', '--');
-      ring.style.strokeDashoffset = '326.73';
+      if (ring.style.strokeDashoffset !== '326.73') ring.style.strokeDashoffset = '326.73';
     }
 
     /* ---- 功率 / 状态 ---- */
@@ -315,13 +331,16 @@
     renderModule(d);
 
     /* ---- 原始数据 ---- */
+    /* 这段文本很长，每 2 秒重写一次会很卡；折叠状态下干脆不生成。 */
     var raw = $('rawDump');
-    if (raw) {
+    var det = raw && raw.parentNode;
+    if (raw && det && det.tagName === 'DETAILS' && det.open) {
       var lines = [];
       Object.keys(k).sort().forEach(function (key) {
         lines.push(key + '=' + k[key]);
       });
-      raw.textContent = lines.join('\n') || '（无数据）';
+      var txt = lines.join('\n') || '（无数据）';
+      if (raw.textContent !== txt) raw.textContent = txt;
     }
   }
 
@@ -350,8 +369,10 @@
     var domHigh = Math.max(60, high);
     var span = domHigh - domLow || 1;
 
-    range.style.left  = ((low - domLow) / span * 100) + '%';
-    range.style.width = ((high - low) / span * 100) + '%';
+    var rl = ((low - domLow) / span * 100) + '%';
+    var rw = ((high - low) / span * 100) + '%';
+    if (range.style.left !== rl)  range.style.left  = rl;
+    if (range.style.width !== rw) range.style.width = rw;
 
     setText('axisLow',  domLow + '℃');
     setText('axisHigh', domHigh + '℃');
@@ -364,13 +385,19 @@
       return;
     }
     var pos = Math.max(0, Math.min(100, (t - domLow) / span * 100));
-    marker.style.left = 'calc(' + pos + '% - 1.5px)';
+    var ml = 'calc(' + pos + '% - 1.5px)';
+    if (marker.style.left !== ml) marker.style.left = ml;
     var inside = t >= low && t <= high;
-    marker.className = 'window-marker' + (inside ? '' : ' out');
+    var mc = 'window-marker' + (inside ? '' : ' out');
+    if (marker.className !== mc) marker.className = mc;
     setText('windowMarkerText', fmt(t, 1) + '℃');
   }
 
   /* ---- 温度区列表 ---- */
+  /* 每 2 秒重建一次 <ul> 会不停触发重排（10 个区 = 30 个节点），
+     所以按「名字 + 数值」拼一个指纹，指纹没变就一个 DOM 都不碰。 */
+  var thermalSig = '';
+
   function renderThermal(k) {
     var ul = $('thermalList');
     var n = num(k['thermal.count']) || 0;
@@ -387,6 +414,13 @@
       items.push({ name: name, c: Math.abs(val) >= 1000 ? val / 1000 : val });
     }
 
+    items.sort(function (a, b) { return b.c - a.c; });
+
+    var sig = '';
+    for (var s = 0; s < items.length; s++) sig += items[s].name + '@' + items[s].c + ';';
+    if (sig === thermalSig) return;
+    thermalSig = sig;
+
     ul.innerHTML = '';
     if (!items.length) {
       var li0 = document.createElement('li');
@@ -396,7 +430,6 @@
       return;
     }
 
-    items.sort(function (a, b) { return b.c - a.c; });
     var maxC = Math.max(60, items[0].c);
 
     for (var j = 0; j < items.length; j++) {
@@ -596,11 +629,12 @@
     }
 
     if (name === 'logs') {
+      /* 日志页不需要 2 秒轮询，停掉能省很多 CPU */
       stopTimer();
       loadLogs();
-    } else if (autoOn) {
-      refresh(true);
-      startTimer();
+    } else {
+      /* 切回来只做一次轻量采集，不要每次都读 1MB 分区 */
+      if (autoOn) { refresh(false); startTimer(); }
     }
   }
 
@@ -656,6 +690,7 @@
         if (s.cap0 !== null && s.cap1 !== null) {
           bits.push(Math.round(s.cap0) + '% → ' + Math.round(s.cap1) + '%');
         }
+        if (s.pmax !== null) bits.push('峰值 ' + fmt(s.pmax, 1) + 'W');
         if (s.tmax !== null) bits.push('最高 ' + fmt(s.tmax, 1) + '℃');
         bits.push(s.samples + ' 点');
         sub.textContent = bits.join(' · ');
@@ -696,6 +731,7 @@
         for (var i = 0; i < n; i++) {
           var nm = k['log.' + i + '.name'];
           if (!nm) continue;
+          var pmw = num(k['log.' + i + '.pmax_mw']);
           logList.push({
             name: nm,
             start: num(k['log.' + i + '.start']),
@@ -704,6 +740,7 @@
             samples: num(k['log.' + i + '.samples']) || 0,
             cap0: num(k['log.' + i + '.cap0']),
             cap1: num(k['log.' + i + '.cap1']),
+            pmax: pmw !== null ? pmw / 1000 : null,
             tmax: tempC(k['log.' + i + '.temp_max'])
           });
         }
@@ -724,16 +761,27 @@
 
   function renderSession(s) {
     var pts = s.pts;
-    var pw = [], tp = [];
-    var pmax = null, tmax = null;
+    var pw = [], tp = [], vt = [], cu = [], ct = [];
+    var pmax = null, tmax = null, vmax = null, cmax = null, chmax = null;
     var c0 = null, c1 = null, cfirst = null, clast = null;
+    var iSum = 0, iN = 0;
 
     for (var i = 0; i < pts.length; i++) {
       var p = pts[i];
       pw.push(p.power);
       tp.push(p.temp);
-      if (p.power !== null && (pmax === null || p.power > pmax)) pmax = p.power;
+      vt.push(p.volt);
+      cu.push(p.cur);
+      ct.push(p.chgTemp);
+
+      if (p.power !== null) {
+        if (pmax === null || p.power > pmax) pmax = p.power;
+        if (p.power > 0) { iSum += p.power; iN++; }
+      }
       if (p.temp !== null && (tmax === null || p.temp > tmax)) tmax = p.temp;
+      if (p.volt !== null && (vmax === null || p.volt > vmax)) vmax = p.volt;
+      if (p.cur !== null && (cmax === null || p.cur > cmax)) cmax = p.cur;
+      if (p.chgTemp !== null && (chmax === null || p.chgTemp > chmax)) chmax = p.chgTemp;
       if (p.cap !== null) { if (c0 === null) c0 = p.cap; c1 = p.cap; }
       if (p.counter !== null) {
         if (cfirst === null) cfirst = p.counter;
@@ -751,8 +799,12 @@
     if (c0 !== null && c1 !== null) rows.push(['电量', Math.round(c0) + '% → ' + Math.round(c1) + '%']);
     if (mah !== null) rows.push(['充入', fmt(mah, 0) + ' mAh']);
     rows.push(['功率峰值', fmt(pmax, 1) + ' W']);
-    rows.push(['温度最高', fmt(tmax, 1) + ' ℃']);
-    rows.push(['采样点', pts.length + ' 个']);
+    if (iN > 0) rows.push(['平均功率', fmt(iSum / iN, 1) + ' W']);
+    rows.push(['电压最高', fmt(vmax, 2) + ' V']);
+    rows.push(['电流最大', fmt(cmax, 2) + ' A']);
+    rows.push(['电池温度', (tmax !== null ? fmt(tmax, 1) + ' ℃' : '—')
+      + (chmax !== null ? '（充电器 ' + fmt(chmax, 1) + ' ℃）' : '')]);
+    rows.push(['采样点', pts.length + ' 个 · 约 ' + Math.round(s.interval || 0) + ' 秒一点']);
     if (s.aborted) rows.push(['状态', '未正常结束（掉电或被系统杀掉）']);
 
     var stats = $('logStats');
@@ -767,10 +819,15 @@
     }
 
     setText('logPowerPeak', fmt(pmax, 1));
-    setText('logTempPeak', fmt(tmax, 1));
+    setText('logVoltPeak',  fmt(vmax, 2));
+    setText('logCurPeak',   fmt(cmax, 2));
+    setText('logTempPeak',  fmt(tmax, 1));
 
-    drawSeries($('logChartPower'), pw, '#58a6ff', 0, Math.max(pw.length, 2));
-    drawSeries($('logChartTemp'),  tp, '#3fb950', null, Math.max(tp.length, 2));
+    var slots = Math.max(pw.length, 2);
+    drawSeries($('logChartPower'), pw, '#58a6ff', 0,    slots);
+    drawSeries($('logChartVolt'),  vt, '#d29922', null, slots);
+    drawSeries($('logChartCur'),   cu, '#a371f7', 0,    slots);
+    drawSeries($('logChartTemp'),  tp, '#3fb950', null, slots);
   }
 
   function openSession(name) {
@@ -801,21 +858,38 @@
           if (!epoch) continue;
           var cur = num(f[3]);
           var volt = num(f[4]);
+          var pow = num(f[7]);
+          var curA = (cur !== null) ? Math.abs(cur) / 1e6 : null;
+          var voltV = (volt !== null) ? volt / 1e6 : null;
+          var pw = (pow !== null && pow > 0) ? pow / 1e6
+                 : ((curA !== null && voltV !== null) ? curA * voltV : null);
           pts.push({
             t: epoch,
             cap: num(f[1]),
             temp: tempC(f[2]),
-            power: (cur !== null && volt !== null)
-              ? Math.abs(cur) / 1e6 * (volt / 1e6) : null,
-            counter: num(f[5])
+            cur: curA,
+            volt: voltV,
+            power: pw,
+            counter: num(f[5]),
+            chgTemp: tempC(f[10])
           });
+        }
+
+        var st = num(k['session.start']);
+        var en = num(k['session.end']);
+        var iv = 0;
+        if (pts.length > 1 && pts[0].t && pts[pts.length - 1].t) {
+          iv = (pts[pts.length - 1].t - pts[0].t) / (pts.length - 1);
+        } else if (st && en && pts.length > 1) {
+          iv = (en - st) / (pts.length - 1);
         }
 
         logCur = {
           name: name,
           pts: pts,
-          start: num(k['session.start']),
-          end: num(k['session.end']),
+          start: st,
+          end: en,
+          interval: iv,
           aborted: (k['session.aborted'] || '').trim() === '1'
         };
         renderSession(logCur);
@@ -876,7 +950,8 @@
   function refresh(full) {
     if (busy) return Promise.resolve();
     busy = true;
-    $('btnRefresh').classList.add('busy');
+    var btn = $('btnRefresh');
+    if (full && btn) btn.classList.add('busy');
 
     return exec('sh ' + moduleDir() + '/monitor.sh' + (full ? ' --full' : ''))
       .then(function (res) {
@@ -898,14 +973,14 @@
 
         render(k, d);
         pushSample(d);
-        redrawCharts();
+        if (tab === 'live') redrawCharts();
       })
       .catch(function (err) {
         banner('采集失败：' + (err && err.message ? err.message : err), 'err');
       })
       .then(function () {
         busy = false;
-        $('btnRefresh').classList.remove('busy');
+        if (btn) btn.classList.remove('busy');
       });
   }
 
@@ -1041,7 +1116,7 @@
     document.addEventListener('visibilitychange', function () {
       if (document.hidden) { stopTimer(); }
       else if (tab === 'logs') { loadLogs(); }
-      else if (autoOn) { refresh(true); startTimer(); }
+      else if (autoOn) { refresh(false); startTimer(); }
     });
 
     window.addEventListener('resize', function () {

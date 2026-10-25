@@ -138,6 +138,8 @@ expect "$OUT" thermal.count 3
 expect "$OUT" thermal.0 "battery|352"
 expect "$OUT" thermal.1 "charger_therm0|418"
 expect "$OUT" thermal.2 "pm8550_tz|38000"
+# 第一个非电池温度区（充电器/主板），页面用它显示充电器温度
+expect "$OUT" chg_temp_raw 418
 
 echo "== 模块状态 =="
 expect "$OUT" module_version "v9.9.9"
@@ -156,7 +158,7 @@ expect "$OUT" cfg_tier max
 
 echo "== 充电日志字段 =="
 expect "$OUT" log_dir "/data/adb/dtbo_charge_unlock/chargelog"
-expect "$OUT" log_interval 30
+expect "$OUT" log_interval 10
 expect "$OUT" log_count 0
 expect "$OUT" log_running 0
 expect "$OUT" log_current ""
