@@ -49,6 +49,15 @@ EOF
 cp "$FAKEPART" "$SANDBOX/partition.img"
 cp "$FAKEPART" "$SANDBOX/original.img"
 
+# ---- 模拟「从旧版本升级上来」时残留的文件 ----
+# 旧版有 post-fs-data.sh 和 pending / confirmed / halted 这些状态文件。
+# customize.sh 应该把它们清掉，否则旧脚本会调用已删除的函数、每次开机报错。
+mkdir -p "$SANDBOX/mod/state"
+printf '#!/system/bin/sh\nboot_guard\n' > "$SANDBOX/mod/post-fs-data.sh"
+for f in pending pending_boot pending_id pending_tries pending_tries_boot confirmed halted; do
+	printf 'legacy\n' > "$SANDBOX/mod/state/$f"
+done
+
 # ---- 模拟安装器提供的函数与变量 ----
 MODPATH="$SANDBOX/mod"
 ARCH="arm64"
@@ -93,16 +102,24 @@ for f in last_sha last_head flash_high backup part orig_sha; do
 	fi
 done
 
-# 2b) 不该再产生「等待开机确认」的标记
+# 2b) 不该再产生「等待开机确认」的标记，旧版本残留的也要清掉
 _STRAY=""
 for f in pending pending_id pending_tries pending_tries_boot confirmed halted; do
-	[ -f "$SANDBOX/mod/state/$f" ] && _STRAY="$_STRAY $f"
+	[ -f "$SANDBOX/mod/state/$f" ] && _STRAY="$_STRAY state/$f"
 done
 if [ -z "$_STRAY" ]; then
 	echo "[ OK ] 没有 pending / confirmed / halted（开机确认已删除）"
 else
 	echo "[FAIL] 仍有残留状态文件:$_STRAY"
 	FAILED=1
+fi
+
+# 2c) 旧版 post-fs-data.sh 必须被清掉
+if [ -e "$SANDBOX/mod/post-fs-data.sh" ]; then
+	echo "[FAIL] 旧版 post-fs-data.sh 没被清掉（它调用的 boot_guard 已删除）"
+	FAILED=1
+else
+	echo "[ OK ] 旧版 post-fs-data.sh 已清理"
 fi
 
 # 3) 备份必须是原始镜像

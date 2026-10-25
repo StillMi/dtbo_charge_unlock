@@ -46,6 +46,22 @@ ui_print "=============================================="
 [ -f "$MODPATH/chargelog.sh" ] && sh "$MODPATH/chargelog.sh" stop >/dev/null 2>&1
 
 # ---------------------------------------------------------------------------
+# 清理旧版本残留
+# 大多数管理器会先清空模块目录再解压，但这不是所有版本都保证的行为。
+# 旧版 post-fs-data.sh 会调用已经删掉的 boot_guard，留下来会让每次开机都报错；
+# 旧版的 pending / confirmed / halted 状态文件对新逻辑也没有意义。
+# 这里显式删一遍，升级上来才干净。
+# ---------------------------------------------------------------------------
+_LEGACY=""
+for f in post-fs-data.sh state/pending state/pending_boot state/pending_id \
+         state/pending_tries state/pending_tries_boot state/confirmed state/halted; do
+	[ -e "$MODPATH/$f" ] && { rm -f "$MODPATH/$f" 2>/dev/null && _LEGACY="$_LEGACY $f"; }
+done
+if [ -n "$_LEGACY" ]; then
+	ui_print "- 已清理旧版本残留:$_LEGACY"
+fi
+
+# ---------------------------------------------------------------------------
 # 选档位（音量键）：结果写回 config.conf，之后手动重刷沿用同一档位
 # ---------------------------------------------------------------------------
 tier_pick
