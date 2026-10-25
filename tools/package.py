@@ -14,7 +14,6 @@ INCLUDE_FILES = [
     "module.prop",
     "customize.sh",
     "common.sh",
-    "post-fs-data.sh",
     "service.sh",
     "action.sh",
     "restore.sh",
@@ -36,7 +35,7 @@ INCLUDE_DIRS = [
 
 # 需要可执行权限的文件
 EXEC_FILES = {
-    "customize.sh", "post-fs-data.sh", "service.sh", "action.sh",
+    "customize.sh", "service.sh", "action.sh",
     "restore.sh", "dump.sh", "monitor.sh", "chargelog.sh", "uninstall.sh",
     "bin/dtc-aarch64",
 }

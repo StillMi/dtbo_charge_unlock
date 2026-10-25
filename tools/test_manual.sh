@@ -17,7 +17,7 @@ rm -rf "$SANDBOX"
 mkdir -p "$SANDBOX/mod" || exit 1
 
 cp "$MODDIR/module.prop" "$MODDIR/common.sh" "$MODDIR/config.conf" "$SANDBOX/mod/"
-cp "$MODDIR/post-fs-data.sh" "$MODDIR/service.sh" "$MODDIR/action.sh" "$SANDBOX/mod/"
+cp "$MODDIR/service.sh" "$MODDIR/action.sh" "$SANDBOX/mod/"
 cp "$MODDIR/restore.sh" "$SANDBOX/mod/"
 cp -r "$MODDIR/ref" "$SANDBOX/mod/"
 cp -r "$MODDIR/bin" "$SANDBOX/mod/"
@@ -50,9 +50,9 @@ ok()  { echo "  [ OK ] $1"; }
 bad() { echo "  [FAIL] $1"; FAILED=1; }
 
 echo "=== 1. 原厂分区 + 无历史状态：开机脚本不该动手 ==="
-sh "$M/post-fs-data.sh" > "$SANDBOX/pfd1.log" 2>&1
+sh "$M/service.sh" > "$SANDBOX/svc1.log" 2>&1
 _rc=$?
-[ "$_rc" -eq 0 ] && ok "post-fs-data 退出码 0" || bad "post-fs-data 退出码 $_rc"
+[ "$_rc" -eq 0 ] && ok "service.sh 退出码 0" || bad "service.sh 退出码 $_rc"
 
 _now=$(sha256sum "$PART" | cut -d' ' -f1)
 [ "$_now" = "$SHA_STOCK" ] && ok "分区未被改动" || bad "分区被开机脚本改掉了"
@@ -67,8 +67,8 @@ if [ -f "$M/state/pending" ]; then
 else
 	ok "没有写入 pending"
 fi
-if grep -q 'dtbo_charge_unlock 开始' "$SANDBOX/pfd1.log" 2>/dev/null; then
-	bad "post-fs-data 竟然执行了刷写流程"
+if grep -q 'dtbo_charge_unlock 开始' "$SANDBOX/svc1.log" 2>/dev/null; then
+	bad "service.sh 竟然执行了刷写流程"
 else
 	ok "没有执行刷写流程"
 fi
@@ -84,9 +84,14 @@ _now=$(sha256sum "$PART" | cut -d' ' -f1)
 
 SHA_APPLIED="$_now"
 
-for f in last_sha last_head backup part pending; do
+for f in last_sha last_head backup part; do
 	[ -f "$M/state/$f" ] && ok "state/$f 已生成" || bad "缺少 state/$f"
 done
+if [ -f "$M/state/pending" ]; then
+	bad "不该再写 pending（开机确认已删除）"
+else
+	ok "没有 pending（开机确认已删除）"
+fi
 
 # last_head 必须是分区开头 1MB 的哈希
 _head_now=$(dd if="$PART" bs=1048576 count=1 2>/dev/null | sha256sum | cut -d' ' -f1)
@@ -96,12 +101,12 @@ _head_st=$(cat "$M/state/last_head" 2>/dev/null)
 
 echo
 echo "=== 3. 刷完再开机：仍然不许自动改动 ==="
-sh "$M/post-fs-data.sh" > "$SANDBOX/pfd2.log" 2>&1
+sh "$M/service.sh" > "$SANDBOX/svc2.log" 2>&1
 _now=$(sha256sum "$PART" | cut -d' ' -f1)
 [ "$_now" = "$SHA_APPLIED" ] && ok "分区未被改动" || bad "分区被开机脚本改了"
 
-if grep -q 'dtbo_charge_unlock 开始' "$SANDBOX/pfd2.log" 2>/dev/null; then
-	bad "post-fs-data 又跑了刷写流程"
+if grep -q 'dtbo_charge_unlock 开始' "$SANDBOX/svc2.log" 2>/dev/null; then
+	bad "service.sh 又跑了刷写流程"
 else
 	ok "没有执行刷写流程"
 fi

@@ -21,11 +21,6 @@ export LOGFILE
 echo "=============================================="
 echo " DTBO 有线充电限制解锁"
 echo "=============================================="
-if [ -f "$STATE/halted" ]; then
-	echo "当前状态: 已停用（$STATE/halted）"
-	echo "删除该文件后重新执行本脚本即可再次尝试。"
-	echo "----------------------------------------------"
-fi
 echo "当前槽位: $(getprop ro.boot.slot_suffix 2>/dev/null)"
 [ -f "$STATE/last_sha" ] && echo "已刷入 sha256: $(cat "$STATE/last_sha")"
 [ -f "$STATE/backup" ]   && echo "原始备份    : $(cat "$STATE/backup")"

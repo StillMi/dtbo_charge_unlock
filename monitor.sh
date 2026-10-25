@@ -326,23 +326,16 @@ emit thermal.count "$_n"
 emit chg_temp_raw  "$_chg_temp"
 
 # ---------------------------------------------------------------- 模块状态 ---
+# 没有「等待开机确认」这类状态了：模块不做开机确认。
+# 判断有没有生效只看 last_head 与当前分区头部是否一致（--full 时才算）。
 S="$MODDIR/state"
 
 rv "$S/last_sha";       emit state_last_sha  "$_RV"
 rv "$S/orig_sha";       emit state_orig_sha  "$_RV"
 rv "$S/part";           emit state_part      "$_RV"
 rv "$S/last_head";      emit state_last_head "$_RV"
-rv "$S/pending";        emit state_pending   "$_RV"
-rv "$S/pending_id";     emit state_pending_id "$_RV"
-rv "$S/pending_tries";  emit state_pending_tries "$_RV"
-rv "$S/confirmed";      emit state_confirmed "$_RV"
+rv "$S/boot_time";      emit state_boot_time "$_RV"
 emit state_last_flash "$(stat -c %Y "$S/last_sha" 2>/dev/null)"
-
-if [ -f "$S/halted" ]; then
-	emit state_halted 1
-else
-	emit state_halted 0
-fi
 
 # 最近一次备份
 _bk=$(ls -1t "$MODDIR/backup/"*.img 2>/dev/null | head -n 1)

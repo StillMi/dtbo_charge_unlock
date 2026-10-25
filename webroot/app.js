@@ -231,18 +231,20 @@
     if (k.state_cur_head) curHead = (k.state_cur_head || '').trim();
     d.headMatch = (d.lastHead && curHead) ? (d.lastHead === curHead) : null;
 
-    /* 模块状态：停用 > 待确认 > 需重新应用 > 已应用 > 未刷写 */
-    if (k.state_halted === '1') {
-      d.mod = { text: '已回滚停用', cls: 'bad', note: '连续开机未确认，已写回备份' };
-    } else if (k.state_pending && k.state_pending !== k.state_confirmed) {
-      var tries = num(k.state_pending_tries) || 0;
-      d.mod = { text: '等待开机确认', cls: 'warn', note: '第 ' + (tries + 1) + ' 次开机' };
-    } else if (d.headMatch === false) {
-      d.mod = { text: '需重新应用', cls: 'warn', note: 'dtbo 已不是本模块写入的那份（系统更新过？），点「运行修改」重新写入' };
+    /* 模块状态只看一件事：当前分区还是不是本模块写进去的那份。
+       没有「等待开机确认」了 —— 模块不做开机确认，刷完重启就生效。 */
+    if (d.headMatch === false) {
+      d.mod = {
+        text: '需重新应用', cls: 'warn',
+        note: 'dtbo 已不是本模块写入的那份（系统更新过？），点「运行修改」重新写入'
+      };
+    } else if (d.headMatch === true) {
+      d.mod = { text: '已生效', cls: 'ok', note: '当前 dtbo 就是本模块写入的那份' };
     } else if (d.sha) {
-      d.mod = { text: '已应用', cls: 'ok', note: 'dtbo 已改写并确认' };
+      /* 还没拿到分区哈希（没做过 --full），先按「已刷写」显示 */
+      d.mod = { text: '已刷写', cls: 'ok', note: '已写入，正在确认当前分区' };
     } else {
-      d.mod = { text: '尚未刷写', cls: '', note: '本次安装未写入 dtbo' };
+      d.mod = { text: '尚未刷写', cls: '', note: '还没写过 dtbo，点「运行修改」开始' };
     }
 
     return d;
@@ -473,10 +475,10 @@
     setText('kSha', d.sha ? d.sha.slice(0, 16) + '…' : '—');
 
     if (d.headMatch === true) {
-      setText('kApplied', '是（与刷入时一致）');
+      setText('kApplied', '是（当前分区就是本模块写入的）');
       $('kApplied').className = 'ok';
     } else if (d.headMatch === false) {
-      setText('kApplied', '否（已被覆盖）');
+      setText('kApplied', '否（已被覆盖，需重新运行）');
       $('kApplied').className = 'warn';
     } else {
       setText('kApplied', '—');
@@ -629,10 +631,14 @@
     }
 
     if (name === 'logs') {
-      /* 日志页不需要 2 秒轮询，停掉能省很多 CPU */
+      /* 日志页不做 2 秒的 sysfs 轮询，但必须换成一个慢速刷新：
+         之前是完全停掉，结果插拔充电器后「记录中 / 等待插上」一直不动，
+         看起来像没写日志。日志只是一次 ls + 一次文件扫描，5 秒一次不费电。 */
       stopTimer();
       loadLogs();
+      if (autoOn) startLogTimer();
     } else {
+      stopLogTimer();
       /* 切回来只做一次轻量采集，不要每次都读 1MB 分区 */
       if (autoOn) { refresh(false); startTimer(); }
     }
@@ -716,23 +722,27 @@
     }
   }
 
-  function loadLogs() {
+  function loadLogs(silent) {
     var ul = $('logList');
-    if (ul) ul.innerHTML = '<li class="empty">读取中…</li>';
-    $('logDetail').classList.add('hidden');
-    $('logListCard').classList.remove('hidden');
+    if (!silent) {
+      if (ul) ul.innerHTML = '<li class="empty">读取中…</li>';
+      $('logDetail').classList.add('hidden');
+      $('logListCard').classList.remove('hidden');
+    }
 
+    /* 刷新时不要把列表清空重画：对比一下指纹，没变就一个节点都不动，
+       变了再整块重画（列表最多 40 行，重建代价可以接受，但没必要每 5 秒来一次）。 */
     return exec('sh ' + moduleDir() + '/monitor.sh --logs', 30000)
       .then(function (res) {
         var k = parseKV(res.stdout || '');
         var n = num(k['log.list_count']) || 0;
 
-        logList = [];
+        var next = [];
         for (var i = 0; i < n; i++) {
           var nm = k['log.' + i + '.name'];
           if (!nm) continue;
           var pmw = num(k['log.' + i + '.pmax_mw']);
-          logList.push({
+          next.push({
             name: nm,
             start: num(k['log.' + i + '.start']),
             end: num(k['log.' + i + '.end']),
@@ -746,15 +756,33 @@
         }
 
         renderLogState(k);
+
+        var sig = listSig(next);
+        if (sig === logSig && ul && ul.children.length) return;
+        logSig = sig;
+        logList = next;
         renderLogList();
       })
       .catch(function (err) {
+        if (silent) return;
+        if (!ul) return;
         ul.innerHTML = '';
         var li = document.createElement('li');
         li.className = 'empty';
         li.textContent = '读取失败：' + (err && err.message ? err.message : err);
         ul.appendChild(li);
       });
+  }
+
+  var logSig = '';
+
+  function listSig(list) {
+    var a = [];
+    for (var i = 0; i < list.length; i++) {
+      var s = list[i];
+      a.push(s.name + ':' + s.end + ':' + s.samples + ':' + s.cap1 + ':' + s.pmax);
+    }
+    return a.join('|');
   }
 
   /* ---- 单个会话 ---- */
@@ -945,6 +973,7 @@
 
   var busy = false;
   var timer = null;
+  var logTimer = null;
   var autoOn = true;
 
   function refresh(full) {
@@ -992,6 +1021,25 @@
 
   function stopTimer() {
     if (timer) { clearInterval(timer); timer = null; }
+  }
+
+  /* 日志页的慢速刷新：只读日志目录，不碰 sysfs 也不读分区。
+     打开会话详情时暂停列表刷新，免得把用户正在看的图刷没。 */
+  var LOG_POLL_MS = 5000;
+
+  function startLogTimer() {
+    stopLogTimer();
+    if (!autoOn) return;
+    logTimer = setInterval(function () {
+      if (document.hidden) return;
+      if (tab !== 'logs') return;
+      if (!$('logDetail').classList.contains('hidden')) return;
+      loadLogs(true);
+    }, LOG_POLL_MS);
+  }
+
+  function stopLogTimer() {
+    if (logTimer) { clearInterval(logTimer); logTimer = null; }
   }
 
   /* --------------------------------------------------------- 运行修改 --- */
@@ -1102,21 +1150,22 @@
       .catch(function () { setText('devModel', '未知机型'); });
 
     refresh(true).then(startTimer);
-
     $('btnRefresh').addEventListener('click', function () { refresh(true); });
     bootApply();
 
     var toggle = $('autoToggle');
     toggle.addEventListener('change', function () {
       autoOn = toggle.checked;
-      if (autoOn) { refresh(false); startTimer(); }
-      else { stopTimer(); }
+      if (!autoOn) { stopTimer(); stopLogTimer(); return; }
+      if (tab === 'logs') { loadLogs(); startLogTimer(); }
+      else { refresh(false); startTimer(); }
     });
 
     document.addEventListener('visibilitychange', function () {
-      if (document.hidden) { stopTimer(); }
-      else if (tab === 'logs') { loadLogs(); }
-      else if (autoOn) { refresh(false); startTimer(); }
+      if (document.hidden) { stopTimer(); stopLogTimer(); }
+      else if (!autoOn) { /* 自动刷新关着，回来也不动 */ }
+      else if (tab === 'logs') { loadLogs(); startLogTimer(); }
+      else { refresh(false); startTimer(); }
     });
 
     window.addEventListener('resize', function () {

@@ -140,7 +140,7 @@
       <div><dt>上次刷写</dt><dd id="kLastFlash">—</dd></div>
       <div><dt>写入分区</dt><dd id="kPart">—</dd></div>
       <div><dt>镜像 SH</dt><dd id="kSha" class="mono">—</dd></div>
-      <div><dt>分区一致</dt><dd id="kApplied">—</dd></div>
+      <div><dt>是否生效</dt><dd id="kApplied">—</dd></div>
       <div><dt>备份</dt><dd id="kBackup">—</dd></div>
       <div><dt>演练模式</dt><dd id="kDryRun">—</dd></div>
     </dl>
@@ -151,6 +151,7 @@
         模块<strong>只在安装时</strong>刷一次，开机不会自动再改。系统更新（OTA）之后
         <code>dtbo</code> 会回到原厂，需要用这个按钮手动跑一次。
         执行时会重新解包 / 改写 / 刷入当前槽位，刷前自动备份、刷后回读校验。
+        <strong>「是否生效」显示「否」就是该跑一次了。</strong>
       </p>
       <pre id="applyOut" class="raw hidden"></pre>
     </div>

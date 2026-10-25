@@ -61,10 +61,6 @@ BINDIR="$MODDIR/bin"
 INTERACTIVE="${INTERACTIVE:-0}"
 # 安装阶段由 customize.sh 设为 1：日志同时打印到安装界面
 INSTALL_MODE="${INSTALL_MODE:-0}"
-# 只有开机脚本（post-fs-data.sh）会把它设为 1。
-# 它决定 run_main 是否执行「开机确认 / 计数 / 自动回滚」这套状态机 ——
-# 手动运行时不该碰这些，否则手动重刷会被「尚未确认开机成功」挡住。
-BOOT_PHASE="${BOOT_PHASE:-0}"
 
 # 对外展示用的模块路径：安装阶段实际目录是 modules_update/<id>，
 # 重启后才会变成 modules/<id>。提示用户时统一用最终路径。
@@ -104,15 +100,6 @@ file_size() {
 	wc -c < "$1" 2>/dev/null | tr -d ' \t\r\n'
 }
 
-# 生成一个一次性令牌，用来把「某次刷写」和「某次开机确认」对应起来。
-# 不用 boot_id 做这件事：某些环境（恢复模式、部分内核）读不到 boot_id，
-# 空值会导致确认永远匹配不上，从而把正常开机误判成启动失败。
-gen_token() {
-	_t=$(od -An -N8 -tx1 /dev/urandom 2>/dev/null | tr -d ' \t\r\n')
-	[ -n "$_t" ] || _t=$(date +%s 2>/dev/null)$$
-	echo "$_t"
-}
-
 # 本次开机的起始时刻（epoch 秒）= 当前时间 - 开机时长
 boot_epoch() {
 	_now=$(date +%s 2>/dev/null)
@@ -126,7 +113,7 @@ boot_epoch() {
 # 判断某个状态文件是不是「本次开机内」写下的。
 #   是  -> 说明刷写发生在本轮开机之后，新 dtbo 还没被加载
 #   否  -> 说明刷写发生在更早的开机，本轮开机加载的就是新 dtbo
-# 优先用 mtime 比较；拿不到 mtime 时退回 boot_id 比较。
+# 只在刷写后打印提示时用；不参与任何自动决策。
 flashed_this_boot() {
 	_f="$1"
 	[ -f "$_f" ] || return 1
@@ -137,11 +124,6 @@ flashed_this_boot() {
 		[ "$_ft" -ge "$BOOT_EPOCH" ] && return 0
 		return 1
 	fi
-
-	# 退路：用 boot_id 比较
-	_pb=$(cat "$STATE/pending_boot" 2>/dev/null)
-	_cb=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null)
-	[ -n "$_pb" ] && [ -n "$_cb" ] && [ "$_pb" = "$_cb" ] && return 0
 	return 1
 }
 
@@ -808,102 +790,6 @@ verify_dts() {
 
 # ---------------------------------------------------------------- 主流程 ---
 
-# ------------------------------------------------- 开机守护（只判断不刷写） ---
-# 只处理「上一次刷写是否成功启动过」，**绝不主动改写 dtbo**。
-#
-# 模块只在两种时候写分区：
-#   1) 安装时      customize.sh
-#   2) 用户手动触发 KernelSU 的「操作」按钮 / WebUI 的「运行修改」
-# 开机阶段不自动重新应用 —— 系统 OTA 后 dtbo 回到原厂，需要用户自己再跑一次。
-#
-# 这里保留的只有安全兜底：
-#   * 已确认启动 → 清掉 pending 标记
-#   * 连续 3 次开机都没走到开机后期 → 写回备份并停用（防止变砖循环）
-#
-# 返回值: 0=可以继续  1=本次不刷写（刚刷过/等确认/已停用）  2=出错或已回滚
-boot_guard() {
-	[ -n "$BOOT_EPOCH" ] || BOOT_EPOCH=$(boot_epoch)
-	[ -n "$CUR_BOOT" ] || CUR_BOOT=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || true)
-
-	[ -f "$STATE/pending" ] || return 0
-
-	_pid=$(cat "$STATE/pending_id" 2>/dev/null)
-	_cf=$(cat "$STATE/confirmed" 2>/dev/null)
-
-	if flashed_this_boot "$STATE/pending"; then
-		log "本次开机内刚刷写过 dtbo，需重启后才生效，本次不做处理"
-		return 1
-	fi
-
-	if [ -n "$_pid" ] && [ "$_cf" = "$_pid" ]; then
-		log "上次刷入的 dtbo 已确认可正常开机"
-		rm -f "$STATE/pending" "$STATE/pending_boot" "$STATE/pending_id" \
-		      "$STATE/pending_tries" "$STATE/pending_tries_boot" "$STATE/confirmed"
-		return 0
-	fi
-
-	_tries=$(cat "$STATE/pending_tries" 2>/dev/null)
-	[ -n "$_tries" ] || _tries=0
-
-	# 同一次开机里只计一次：post-fs-data 跑过之后，用户可能又手动运行了一次
-	_tb=$(cat "$STATE/pending_tries_boot" 2>/dev/null)
-	if [ -n "$CUR_BOOT" ] && [ -n "$_tb" ] && [ "$_tb" = "$CUR_BOOT" ]; then
-		log "本次开机已计过一次（当前第 $_tries 次未确认），不重复计数"
-		return 1
-	fi
-
-	_tries=$((_tries + 1))
-	echo "$_tries" > "$STATE/pending_tries"
-	[ -n "$CUR_BOOT" ] && echo "$CUR_BOOT" > "$STATE/pending_tries_boot"
-
-	if [ "$_tries" -lt 3 ]; then
-		log "上次刷入的 dtbo 尚未确认开机成功（刷写后第 $_tries 次开机），本次不刷写"
-		return 1
-	fi
-
-	# ---- 连续没确认，回滚 ----
-	_bk=$(cat "$STATE/pending" 2>/dev/null)
-	log "刷写后连续 $_tries 次开机都没走到开机后期，判定新 dtbo 有问题，开始回滚"
-	if [ -z "$_bk" ] || [ ! -f "$_bk" ]; then
-		log "找不到备份文件，无法回滚"
-		return 2
-	fi
-
-	# 只有真要写回分区时才去定位分区
-	if [ -z "$PART" ]; then
-		detect_slot
-		resolve_partition || { log "无法定位分区，回滚失败"; return 2; }
-	fi
-
-	dd if="$_bk" of="$PART" bs=1048576 conv=fsync 2>/dev/null || log "回滚写入失败！"
-	sync
-	if [ "$(sha256_of "$_bk")" = "$(read_partition_sha)" ]; then
-		log "回滚校验通过，原始 dtbo 已恢复"
-		rm -f "$STATE/pending" "$STATE/pending_boot" "$STATE/pending_id" \
-		      "$STATE/pending_tries" "$STATE/pending_tries_boot" "$STATE/confirmed"
-		echo "rolled-back $(date '+%Y-%m-%d %H:%M:%S')" > "$STATE/halted"
-		log "已回滚并停用本模块。确认无误后删除 $STATE/halted 可重新启用。"
-		return 2
-	fi
-	log "回滚校验失败！请用 fastboot 手工刷回: $_bk"
-	return 2
-}
-
-# 手动运行（安装 / 操作按钮 / WebUI）时的收尾：只清掉「已确认开机成功」的
-# pending，不计数、不回滚、也不阻断 —— 手动刷写随时可以重新来一次，
-# 新的刷写会把 pending 换成新的，重新开始等确认。
-pending_housekeeping() {
-	[ -f "$STATE/pending" ] || return 0
-	_pid=$(cat "$STATE/pending_id" 2>/dev/null)
-	_cf=$(cat "$STATE/confirmed" 2>/dev/null)
-	if [ -n "$_pid" ] && [ "$_cf" = "$_pid" ]; then
-		log "上次刷入的 dtbo 已确认可正常开机"
-		rm -f "$STATE/pending" "$STATE/pending_boot" "$STATE/pending_id" \
-		      "$STATE/pending_tries" "$STATE/pending_tries_boot" "$STATE/confirmed"
-	fi
-	return 0
-}
-
 run_main() {
 	mkdir -p "$STATE" "$BACKUP" "$LOGDIR" 2>/dev/null
 	if [ -z "$LOGFILE" ]; then
@@ -928,27 +814,9 @@ run_main() {
 	CUR_BOOT=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || true)
 	BOOT_EPOCH=$(boot_epoch)
 
-	# ---- 上一次刷写后的开机确认 / 自动回滚 ----
-	# 「新 dtbo 没问题」的唯一判据是 service.sh 在开机后期写入了 confirmed
-	# （能走到开机后期就说明没卡在启动阶段）。
-	# 刻意不用「距刷写已过 N 分钟」之类的兜底判据：安装阶段刷写时系统正跑在
-	# 旧 dtbo 上，运行时长完全不能证明新 dtbo 可用，用时间兜底会把「刷完就
-	# 起不来」误判成成功，反而丢掉自动回滚保护。
-	if [ "$BOOT_PHASE" = "1" ]; then
-		boot_guard
-		case $? in
-			0) ;;
-			1) log "=========== 结束（跳过） ==========="; return 0 ;;
-			*) return 1 ;;
-		esac
-	else
-		pending_housekeeping
-	fi
-
-	if [ -f "$STATE/halted" ]; then
-		log "模块处于停用状态（$STATE/halted）。删除该文件可重新启用。"
-		return 0
-	fi
+	# 开机阶段不做任何自动处理：没有「开机确认」、没有「连续几次没起来就回滚」。
+	# 唯一判断「有没有生效」的地方是 WebUI：比对当前分区头部哈希和
+	# state/last_head（见 monitor.sh --full），不一致就提示需要重新运行一次。
 
 	# ---- 读取当前分区镜像 ----
 	ORIG="$WORK/orig.img"
@@ -1081,14 +949,9 @@ run_main() {
 	log "原始镜像已备份: $BK"
 
 	# ---- 刷写 ----
+	# 不再写 pending / pending_id / pending_tries 之类的「等待开机确认」标记：
+	# 模块不做开机确认，也不需要它。备份路径只记在 state/backup，供手工回滚用。
 	log "写入分区 $PART ..."
-	FLASH_ID=$(gen_token)
-	echo "$BK" > "$STATE/pending"
-	echo "$CUR_BOOT" > "$STATE/pending_boot"
-	echo "$FLASH_ID" > "$STATE/pending_id"
-	echo 0 > "$STATE/pending_tries"
-	rm -f "$STATE/pending_tries_boot" "$STATE/confirmed"
-	sync
 
 	dd if="$WORK/new.img" of="$PART" bs=1048576 conv=fsync 2>"$WORK/dd.err"
 	_rc=$?
@@ -1102,8 +965,6 @@ run_main() {
 		log "回读校验失败（回读 ${_back:-空} != 写入 $NEW_SHA），立即回滚 ..."
 		dd if="$BK" of="$PART" bs=1048576 conv=fsync 2>/dev/null
 		sync
-		rm -f "$STATE/pending" "$STATE/pending_boot" "$STATE/pending_id" \
-		      "$STATE/pending_tries" "$STATE/pending_tries_boot" "$STATE/confirmed"
 		die "写入后校验不一致，已回滚原始镜像"
 		return 1
 	fi
@@ -1121,7 +982,7 @@ run_main() {
 	_head=$(dd if="$WORK/new.img" bs=1048576 count=1 2>/dev/null | sha256sum 2>/dev/null | cut -d' ' -f1)
 	[ -n "$_head" ] && echo "$_head" > "$STATE/last_head"
 
-	log "刷写成功。重启后生效；下次开机会自动确认启动结果。"
+	log "刷写成功。重启后生效。"
 	log "如需回滚: sh $SHOWDIR/restore.sh"
 	log "=========== 结束（成功） ==========="
 	return 0

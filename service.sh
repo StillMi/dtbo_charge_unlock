@@ -1,12 +1,14 @@
 #!/system/bin/sh
-# 开机后期：
-#   1. 启动充电日志后台记录（独立进程，只读 sysfs，不碰分区）
-#   2. 确认刷入的 dtbo 能正常开机
+# KernelSU / Magisk 模块：开机后期执行。
 #
-# 关于确认：如果本轮开机加载的是「上一次刷入的 dtbo」，并且已经走到开机后期
-# （说明没有卡在启动阶段），就记为已确认。
-# 这个标记只是提前确认；即使本脚本没跑，下次开机也不会误回滚——
-# 只有「连续 3 次开机都没走到开机后期」才会回滚。
+# 这里只做两件事，都不碰 dtbo 分区：
+#   1. 拉起充电日志的后台记录进程
+#   2. 记一下本次开机时刻，供页面参考
+#
+# 没有「开机确认」，也没有「连续几次没起来就自动回滚」。
+# 判断模块有没有生效只有一条路：WebUI 里比对当前分区头部哈希与
+# state/last_head（monitor.sh --full 输出 state_cur_head）。
+# 系统 OTA 之后 dtbo 会回到原厂，模块不会自己再改，需要手动跑一次。
 
 MODDIR="${0%/*}"
 [ -f "$MODDIR/module.prop" ] || MODDIR=/data/adb/modules/dtbo_charge_unlock
@@ -16,22 +18,11 @@ LOGDIR="$MODDIR/logs"
 mkdir -p "$STATE" "$LOGDIR" 2>/dev/null
 
 # ---- 充电日志 ----
-# 必须放在下面的提前 return 之前，否则没刷写过 dtbo 的设备永远不会开始记录。
 [ -f "$MODDIR/chargelog.sh" ] && sh "$MODDIR/chargelog.sh" start >/dev/null 2>&1
 
-[ -f "$STATE/pending" ] || exit 0
+# ---- 记录本次开机时刻（只用于展示，不参与任何判断） ----
+date +%s > "$STATE/boot_time" 2>/dev/null
 
-. "$MODDIR/common.sh" 2>/dev/null
-
-# 刷写发生在本轮开机之后 → 新 dtbo 还没被加载，不能确认
-if flashed_this_boot "$STATE/pending"; then
-	exit 0
-fi
-
-FLASH_ID=$(cat "$STATE/pending_id" 2>/dev/null)
-[ -n "$FLASH_ID" ] || exit 0
-echo "$FLASH_ID" > "$STATE/confirmed"
-
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] 已确认刷入的 dtbo 可以正常开机" \
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] 开机后期：充电日志已拉起" \
 	>> "$LOGDIR/$(date '+%Y%m%d').log" 2>/dev/null
 exit 0

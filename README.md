@@ -86,8 +86,11 @@
   2. 手动触发：KernelSU 模块页的「操作」按钮（`action.sh`）或 WebUI
      的「运行修改」。
 
-  `post-fs-data.sh` **不刷写任何东西**，只做只读判断：收掉已确认的 pending、
-  统计「刷写后还没确认开机」的次数、必要时回滚。所以 OTA 之后需要手动跑一次。
+  开机阶段（`service.sh`）**不刷写任何东西**，只拉起充电日志的后台记录进程。
+  所以 OTA 之后需要手动跑一次。
+* **怎么判断有没有生效**：比对当前分区开头 1MB 的哈希与刷写时记下的
+  `state/last_head`。一致就是「已生效」，不一致就是「需重新应用」。
+  WebUI 的模块状态和「是否生效」这一行就是靠它，**没有开机确认这套东西**。
 * **镜像格式**：自动识别两种，都能处理——
   * **DTBO 表**（`0xd7b7ab1e` 魔数）：解析 `dt_table_header` 与 `dt_table_entry`，
     逐个条目改写，再按原镜像的布局风格重新排布。
@@ -115,7 +118,7 @@
 ## 二、安装与使用
 
 1. **先按上面那节把 Scene 温控改成「丧心病狂」**，否则装了也不一定有效。
-2. 用 KernelSU（或 Magisk）安装 `dtbo_charge_unlock-v1.9.0.zip`。
+2. 用 KernelSU（或 Magisk）安装 `dtbo_charge_unlock-v1.10.0.zip`。
    **安装过程中就会刷写**，安装界面能看到完整过程与结果。
 3. 安装过程中会让你选档位（见下），选完继续。
 4. 安装完成 → 重启手机 → 新 `dtbo` 生效。
@@ -181,9 +184,9 @@ WebUI 会帮你判断：状态显示 **需重新应用**、「分区一致」显
   以及当前温度落在窗口内还是越界
 * 功率与温度的实时曲线（最近 5 分钟）
 * 电池/充电/PMIC 相关温度区
-* 模块自身状态：是否已应用、上次刷写时间、是否在等开机确认、备份情况
-* **是否还是本模块写入的那份**（「分区一致」）—— 系统更新后这里会变成
-  **否（已被覆盖）**，状态也会提示 **需重新应用**
+* 模块自身状态：上次刷写时间、写入分区、备份情况
+* **是否生效**：当前分区是不是本模块写入的那份 —— 系统更新后这里会变成
+  **否（已被覆盖，需重新运行）**，模块状态也会提示 **需重新应用**
 
 页面上的采集是**只读**的：只用 `ksu.exec` 跑 `monitor.sh` 读 `/sys`、`/proc`
 和模块自己的 `state/`，不写分区、不改配置。
@@ -233,6 +236,10 @@ WebUI 会帮你判断：状态显示 **需重新应用**、「分区一致」显
 它只往自己的日志目录**追加文本**，不碰分区、不改配置。想在页面里立刻开始
 记录（比如开机时进程没起来），点 **「启动记录」** 即可。
 
+日志页会**自己刷新**（每 5 秒读一次日志目录，只读文本、不碰 `/sys`）：
+插上充电器后状态会变成「正在记录这次充电」，拔掉后会多出一条已结束的记录。
+打开某条会话详情时暂停列表刷新，免得把正在看的曲线刷掉。
+
 ## 三、安全机制
 
 | 机制 | 说明 |
@@ -241,22 +248,20 @@ WebUI 会帮你判断：状态显示 **需重新应用**、「分区一致」显
 | 备份 | 刷写前把整个分区备份到 `backup/dtbo_a_YYYYmmdd-HHMMSS.img`，并校验备份完整 |
 | 刷前复核 | 新镜像必须能反编译回来，且 174 项参数逐条匹配，否则中止 |
 | 刷后回读 | 写入后回读分区比对 sha256，不一致立刻回滚 |
-| 开机确认 | 每次刷写生成一个一次性令牌；下次开机走到 `service.sh`（开机后期）即记为确认 |
-| 自动回滚 | 刷写后连续 3 次开机都没走到开机后期，判定新 dtbo 有问题，自动写回备份并停用模块 |
 | 重复运行不白刷 | 镜像和档位都没变时直接跳过；只改了档位会自动重刷 |
 | 安装失败不阻断 | 安装阶段刷写失败（例如分区只读）时模块照常装好，可手动再跑一次；想直接中止可设 `ABORT_ON_INSTALL_FAIL=1` |
+| 生效自检 | 记下刷入镜像开头 1MB 的哈希，WebUI 每次打开都回读当前分区比对，不一致就提示「需重新应用」 |
 
-> 自动回滚是唯一会在开机阶段写分区的动作，而且只在「刷完连续 3 次起不来」
-> 这种已经出事的情况下才动手。它是用来把人从变砖循环里救出来的，
-> 不是常规的自动刷写。
+> **没有开机验证、也没有自动回滚。** 早期版本有一套「刷完等开机确认，连续 3 次
+> 起不来就自动写回备份」的机制，现在已经删掉了 —— 它会在开机阶段写分区，和
+> 「只在手动触发时才改」这条原则冲突。现在判断模块有没有生效只有一条：
+> WebUI 里「是否生效」显示「是」就是生效了，显示「否」就点一次「运行修改」。
+>
+> 真要恢复原厂，用下面的 `restore.sh` 手工回滚，它是显式操作，不会自己触发。
 
 > **不检查 bootloader 锁定状态。** KernelSU 会伪造 `ro.boot.flash.locked` /
 > `ro.boot.verifiedbootstate`（例如报成 `green`），按它们判断只会把正常设备
 > 误判成「已锁定」而拒绝刷写。实际能不能写，由 `dd` 的返回值和回读校验说了算。
-
-> 为什么不用「距刷写已过 N 分钟」当兜底判据？安装阶段刷写时，系统正跑在**旧**
-> `dtbo` 上，运行时长完全不能证明新 `dtbo` 可用。用时间兜底会把「刷完就起不来」
-> 误判成成功，反而丢掉自动回滚保护。所以判据只有一条：**能不能走到开机后期**。
 
 手工回滚：
 
@@ -298,8 +303,7 @@ dtbo_charge_unlock/
 ├── customize.sh          安装时执行：权限 + 立刻刷写
 ├── config.conf           用户配置
 ├── common.sh             核心逻辑（槽位/分区/改写/校验/刷写）
-├── post-fs-data.sh       开机早期：确认/回滚（不刷写）
-├── service.sh            开机后期：确认「新 dtbo 能正常开机」+ 拉起充电日志
+├── service.sh            开机后期：只拉起充电日志（不刷写、不做开机确认）
 ├── chargelog.sh          充电日志后台进程（插入→拔出，一段会话一个文本）
 ├── action.sh             KernelSU「操作」按钮 / 手动执行
 ├── restore.sh            手工回滚
@@ -315,7 +319,7 @@ dtbo_charge_unlock/
 │   ├── patch.sed         改写脚本（含温度占位符）
 │   ├── patch.list        改写规则原始表（节点/属性/取值）
 │   └── expect/*.txt      校验用的期望属性行
-├── state/                运行状态（刷写哈希、pending 标记等）
+├── state/                运行状态（刷写哈希、分区头部哈希、备份路径）
 ├── backup/               原始分区备份
 ├── logs/                 日志（安装阶段单独一份 install-*.log）
 └── （模块外）/data/adb/dtbo_charge_unlock/chargelog/   充电日志（升级不清空）
@@ -378,7 +382,6 @@ python tools/mkfixtures.py . /path/to/dtc
 sh tools/test_load.sh      . /path/to/dtc build/sb_load
 sh tools/test_install.sh   . build/part_dtbo.img  /path/to/dtc build/sb_inst
 sh tools/test_lifecycle.sh . build/part_dtbo.img  /path/to/dtc build/sb_life
-sh tools/test_rollback.sh  . build/part_dtbo.img  /path/to/dtc build/sb_rb
 sh tools/test_edge.sh      . build/part_dtbo.img  /path/to/dtc build/sb_edge
 sh tools/test_module.sh    . build/part_dtbo.img  /path/to/dtc build/sandbox
 
@@ -403,7 +406,7 @@ python tools/gen_ref.py  <参考.dts> ref
 python tools/gen_sed.py  ref/patch.list ref
 
 # 4) 打包（内置编码检查，有 CRLF / BOM 会直接拒绝）
-python tools/package.py  . dist/dtbo_charge_unlock-v1.9.0.zip
+python tools/package.py  . dist/dtbo_charge_unlock-v1.10.0.zip
 ```
 
 WebUI 的页面逻辑也可以在 PC 上验证，不需要设备。做法是造一个假的 `ksu`
@@ -421,7 +424,7 @@ python tools/mkwebui_harness.py . build/webui build/monitor_sample.txt
 <浏览器> --headless=new --virtual-time-budget=24000 \
          --dump-dom "file:///<绝对路径>/build/webui/index.html" > build/dom.html
 
-# 7) 状态分支：充电中 / 放电 / 已充满 / 过热越界 / 低于下限 / 已停用 /
+# 7) 状态分支：充电中 / 放电 / 已充满 / 过热越界 / 低于下限 / 残留 halted /
 #    OTA 后需重新应用 / 无电池节点（共 9 个场景）
 python tools/webui_scenarios.py . build/wsc "<浏览器路径>" build/monitor_sample.txt
 ```
@@ -442,12 +445,11 @@ python tools/webui_scenarios.py . build/wsc "<浏览器路径>" build/monitor_sa
 | --- | --- |
 | `test_load.sh` | `common.sh` 能被正常 source，所有函数都定义齐全 |
 | `test_install.sh` | 模拟安装器跑 `customize.sh`：安装阶段即完成刷写、备份、状态落盘 |
-| `test_lifecycle.sh` | 安装 → 重启确认 → 再次开机清理状态；每一步都比对分区 sha256，确认**开机没有改动分区**；最后模拟 OTA 换回原厂，确认开机**不会**自动重新应用 |
+| `test_lifecycle.sh` | 安装 → 反复开机；每一步都比对分区 sha256，确认**开机没有改动分区**；确认不再产生 pending/confirmed/halted；模拟 OTA 换回原厂，确认开机**不会**自动重新应用、页面会提示「需重新应用」 |
 | `test_manual.sh` | 「只手动触发」约定：原厂分区 + 无状态时开机脚本不许动手；手动 `action.sh` 才刷；刷完开机仍不许动；重复运行跳过；`last_head` 与分区开头一致 |
-| `test_rollback.sh` | 连续 3 次开机未确认 → 自动回滚 → 写 `halted` → 后续跳过 |
-| `test_edge.sh` | 令牌匹配/不匹配、同一次开机内刷写不计数、校验器正反两向、`FORCE_SLOT` |
+| `test_edge.sh` | 无状态时开机不碰分区、旧版本残留的 pending 不会让开机脚本动手、`last_head` 判据正反两向、校验器正反两向、`FORCE_SLOT`、单分区识别 |
 | `test_module.sh` | DTBO 表（3 条目 / 单条目 / 混合板型 / **大端+紧凑布局**）、裸 DTB 单段与双段、已刷过跳过、只换档位会重刷、演练模式、A/B 与单分区槽位 |
-| `test_monitor.sh` | WebUI 采集脚本：电池/电源/温度区字段、充电器温度 `chg_temp_raw`、模块状态四态、无电池节点时降级、`--full` 时的分区头部比对、充电日志的 `log_*` 字段 |
+| `test_monitor.sh` | WebUI 采集脚本：电池/电源/温度区字段、充电器温度 `chg_temp_raw`、不再输出 pending/halted、残留旧状态文件不影响输出、无电池节点时降级、`--full` 时的分区头部比对、充电日志的 `log_*` 字段 |
 | `test_chargelog.sh` | 充电日志后台进程：没插电不建会话、插电建会话、**11 个字段**（含功率/充电器电压/限流/充电器温度）、继续采样、拔出收尾、`status` 兜底、异常中断补 `#aborted`、重复启动、`CHARGELOG=0` 关闭、`monitor.sh --logs/--log` 输出（含功率/电压/电流峰值）、路径穿越被拒、超出 `CHARGELOG_MAX` 淘汰最旧 |
 | `test_key.sh` | 音量键解析（按下/抬起/无关事件/多行）与 `tier_pick` 各分支：音量下→48、音量上→56、不按、`FORCE_TIER` 合法/乱填、`TIER_PROMPT=0` |
 | `test_tier.sh` | 逐个档位跑完整安装，再把刷好的分区拆出来反编译，确认 `ffc_temp_high = <0x30>/<0x38>` 与 JEITA 高温边界真的是 48/56，**并确认另一个档位的取值没有残留**（防止只改了一半） |

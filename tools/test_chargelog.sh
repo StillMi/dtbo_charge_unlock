@@ -155,6 +155,23 @@ run once
 [ "$(grep -c '^#end=' "$F")" = "1" ] \
 	&& ok "再跑一次不会重复写 #end" || bad "#end 重复了"
 
+echo "== 同一秒内先结束再开新会话：不能覆盖上一个文件 =="
+# 插拔很快时会连开两个会话，文件名（秒级时间戳）会撞上。
+# 早期版本用 > 写入，直接把上一个会话截断了，页面里那次记录就没了。
+_prev="$F"
+_prev_lines=$(samples "$_prev")
+plug
+run once
+_new1=$(cat "$LOGDIR/.current" 2>/dev/null)
+[ "$_new1" != "$_prev" ] && ok "新会话用了不同文件名（$_new1）" \
+	|| bad "新会话把上一个文件覆盖了（$_new1）"
+[ "$(samples "$_prev")" = "$_prev_lines" ] \
+	&& ok "上一个会话内容没被截断" || bad "上一个会话被截断（$(samples "$_prev") 行）"
+# 收尾，回到干净状态
+unplug
+run once
+rm -f "$LOGDIR/.current"
+
 echo "== 电池状态兜底（供电源都没 online） =="
 w "$PS/usb/online" 0
 w "$PS/battery/status" "Charging"
@@ -248,6 +265,10 @@ CHARGELOG_DIR="$LOGDIR" MODDIR="$MOD" sh "$MODDIR_SRC/monitor.sh" --log nosuch.l
 echo "== 超出 CHARGELOG_MAX 时淘汰最旧的 =="
 sed 's/^CHARGELOG_MAX=40/CHARGELOG_MAX=3/' "$MOD/config.conf" > "$MOD/config.tmp"
 mv "$MOD/config.tmp" "$MOD/config.conf"
+# 前面几个用例留下的会话数量不确定，这里清空目录，只放本用例自己的文件，
+# 断言才有确定含义。
+rm -rf "$LOGDIR"
+mkdir -p "$LOGDIR"
 _i=0
 while [ "$_i" -lt 5 ]; do
 	_f="$LOGDIR/20210101-00000$_i.log"
@@ -261,12 +282,18 @@ while [ "$_i" -lt 5 ]; do
 	_i=$((_i + 1))
 done
 plug
-rm -f "$LOGDIR/.current"
 run once
 _cnt=$(ls -1 "$LOGDIR"/*.log 2>/dev/null | wc -l | tr -d ' \t\r\n')
-[ "$_cnt" = "3" ] && ok "只留 3 个" || bad "留下了 $_cnt 个（上限 3）"
+[ "$_cnt" = "3" ] && ok "只留 3 个（5 个旧的 + 1 个新的 → 3）" \
+	|| bad "留下了 $_cnt 个（上限 3）"
 _new=$(cat "$LOGDIR/.current" 2>/dev/null)
 [ -f "$LOGDIR/$_new" ] && ok "新会话没被自己删掉" || bad "新会话被淘汰了"
+# 被淘汰的应该是最旧的几个
+if [ -f "$LOGDIR/20210101-000000.log" ]; then
+	bad "最旧的会话没被淘汰"
+else
+	ok "最旧的会话已被淘汰"
+fi
 
 echo ""
 if [ "$fail" -eq 0 ]; then

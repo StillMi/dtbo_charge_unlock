@@ -81,12 +81,11 @@ rm -f "$TMP/rb.img" "$TMP/rb.trim"
 
 if [ -n "$A" ] && [ "$A" = "$B" ]; then
 	echo "校验通过，已恢复原始 dtbo。重启后生效。"
+	# 恢复后清掉「本模块刷过」的痕迹，页面就会显示「尚未刷写」而不是
+	# 「需重新应用」——分区现在确实是原厂的，不需要再跑一次。
 	rm -f "$STATE/last_sha" "$STATE/last_head" "$STATE/flash_high" \
-	      "$STATE/pending" "$STATE/pending_boot" \
-	      "$STATE/pending_id" "$STATE/pending_tries" "$STATE/pending_tries_boot" \
-	      "$STATE/confirmed"
-	echo "已停用 $(date '+%Y-%m-%d %H:%M:%S')" > "$STATE/halted"
-	echo "提示: 若想再次启用本模块，删除 $STATE/halted 即可。"
+	      "$STATE/backup"
+	echo "提示: 想再次启用本模块，重新执行 action.sh 或点 WebUI 的「运行修改」即可。"
 else
 	die "校验失败（$A != $B），请用 fastboot 手工刷回 $IMG"
 fi

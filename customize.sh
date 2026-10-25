@@ -3,7 +3,7 @@
 # 安装脚本：在安装过程中就直接完成「识别槽位 → 提取 dtbo → 解包 → 改写 →
 # 打包 → 复核 → 备份 → 刷入 → 回读校验」，装完重启即可生效。
 #
-# 开机阶段（post-fs-data.sh）**不写任何分区**，只做确认 / 计数 / 必要时回滚。
+# 开机阶段（service.sh）**不写任何分区**，只拉起充电日志。
 # 系统 OTA 之后需要用户手动触发一次（KernelSU「操作」或 WebUI「运行修改」）。
 # ============================================================================
 
@@ -12,7 +12,6 @@ SKIPUNZIP=0
 ui_print "- 设置模块文件权限"
 set_perm_recursive "$MODPATH" 0 0 0755 0644
 set_perm "$MODPATH/bin/dtc-aarch64" 0 0 0755
-set_perm "$MODPATH/post-fs-data.sh" 0 0 0755
 set_perm "$MODPATH/service.sh" 0 0 0755
 set_perm "$MODPATH/action.sh" 0 0 0755
 set_perm "$MODPATH/restore.sh" 0 0 0755
@@ -64,8 +63,7 @@ if [ "$RC" -eq 0 ]; then
 		ui_print "  温度档位: $(tier_desc)"
 		ui_print "  已刷入 sha256: $(cat "$MODPATH/state/last_sha")"
 		ui_print "  原始镜像备份: $(cat "$MODPATH/state/backup" 2>/dev/null)"
-		ui_print "- 刷入后的首次开机会自动确认能否正常启动；"
-		ui_print "  若连续 3 次开机都起不来，会自动回滚原始 dtbo 并停用本模块。"
+		ui_print "- 重启后生效。打开模块的 WebUI，「是否生效」显示「是」就说明成功了。"
 		ui_print "- 以后模块不会自动再刷。系统 OTA 之后请手动点一次"
 		ui_print "  KernelSU 的「操作」按钮，或打开 WebUI 点「运行修改」。"
 		ui_print "- 提醒: 系统层温控优先级高于 dtbo，"

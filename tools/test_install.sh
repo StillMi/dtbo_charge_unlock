@@ -14,7 +14,7 @@ mkdir -p "$SANDBOX/mod"
 
 # ---- 模拟安装器解压出来的模块目录 ----
 cp "$MODDIR/module.prop" "$MODDIR/common.sh" "$MODDIR/config.conf" "$MODDIR/customize.sh" "$SANDBOX/mod/"
-cp "$MODDIR/post-fs-data.sh" "$MODDIR/service.sh" "$MODDIR/action.sh" "$SANDBOX/mod/"
+cp "$MODDIR/service.sh" "$MODDIR/action.sh" "$SANDBOX/mod/"
 cp "$MODDIR/restore.sh" "$MODDIR/dump.sh" "$MODDIR/uninstall.sh" "$SANDBOX/mod/"
 cp -r "$MODDIR/ref" "$SANDBOX/mod/"
 cp -r "$MODDIR/bin" "$SANDBOX/mod/"
@@ -83,8 +83,8 @@ else
 	echo "[ OK ] 安装阶段已写入分区"
 fi
 
-# 2) 状态文件应齐全
-for f in last_sha last_head flash_high backup part orig_sha pending pending_boot; do
+# 2) 状态文件应齐全（不再有 pending 系列：开机确认已删除）
+for f in last_sha last_head flash_high backup part orig_sha; do
 	if [ -f "$SANDBOX/mod/state/$f" ]; then
 		echo "[ OK ] state/$f = $(cat "$SANDBOX/mod/state/$f")"
 	else
@@ -92,6 +92,18 @@ for f in last_sha last_head flash_high backup part orig_sha pending pending_boot
 		FAILED=1
 	fi
 done
+
+# 2b) 不该再产生「等待开机确认」的标记
+_STRAY=""
+for f in pending pending_id pending_tries pending_tries_boot confirmed halted; do
+	[ -f "$SANDBOX/mod/state/$f" ] && _STRAY="$_STRAY $f"
+done
+if [ -z "$_STRAY" ]; then
+	echo "[ OK ] 没有 pending / confirmed / halted（开机确认已删除）"
+else
+	echo "[FAIL] 仍有残留状态文件:$_STRAY"
+	FAILED=1
+fi
 
 # 3) 备份必须是原始镜像
 BK=$(cat "$SANDBOX/mod/state/backup" 2>/dev/null)

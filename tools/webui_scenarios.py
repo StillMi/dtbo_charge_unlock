@@ -116,6 +116,8 @@ def sc_hot(t):
 
 
 def sc_halted(t):
+    # 旧版本会写 state/halted 表示「自动回滚停用」。现在没有这个机制了，
+    # 这个场景改成验证「残留的 halted 文件不会再把状态卡成已停用」。
     t = setkv(t, "state_halted", "1")
     return t
 
@@ -145,10 +147,7 @@ def sc_safe(t):
 def sc_reapply(t):
     # 系统 OTA 之后分区被换回原厂：state_cur_head 与 state_last_head 对不上，
     # 页面应该提示「需重新应用」。
-    # 样本里带着「等待开机确认」的 pending，会盖住这个判断，先清掉。
     t = setkv(t, "state_cur_head", "0" * 64)
-    t = setkv(t, "state_pending", "")
-    t = setkv(t, "state_confirmed", "")
     return t
 
 
@@ -157,14 +156,15 @@ SCENARIOS = [
         "errors": "0", "banner": "hidden",
         "status_has": "充电中", "statusClass_has": "ok",
         "markerClass_not_has": "out",
-        "moduleChip": "等待开机确认", "moduleClass_has": "warn",
+        "moduleChip": "已生效", "moduleClass_has": "ok",
+        "applied_has": "是",
     }),
     ("放电中", sc_discharge, {
         "errors": "0", "banner": "hidden",
         "status_has": "放电中",
         "current": "1.45",
         "markerClass_not_has": "out",
-        "moduleChip": "等待开机确认",
+        "moduleChip": "已生效",
     }),
     ("已充满", sc_full, {
         "errors": "0", "status_has": "已充满", "statusClass_has": "ok",
@@ -190,8 +190,8 @@ SCENARIOS = [
         "errors": "0", "temp": "-2.5",
         "markerClass_has": "out",
     }),
-    ("已回滚停用", sc_halted, {
-        "errors": "0", "moduleChip": "已回滚停用", "moduleClass_has": "bad",
+    ("残留 halted 不再影响状态", sc_halted, {
+        "errors": "0", "moduleChip": "已生效", "moduleClass_has": "ok",
     }),
     ("无电池节点", sc_nobatt, {
         "errors": "0", "banner": "shown", "status": "—",

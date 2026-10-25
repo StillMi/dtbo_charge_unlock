@@ -1,11 +1,12 @@
 #!/bin/sh
 # 边界情况测试：
-#   1) confirmed 命中时，下一次开机应清除 pending
-#   2) 没有 confirmed、tries 未到 3，应只跳过不回滚
-#   3) 本次开机内刚刷写（pending 比开机还新），不应计数也不应回滚
+#   1) 没有 pending 时，service.sh 什么也不做
+#   2) 残留的旧版本 pending 文件不会让开机脚本动手改分区
+#   3) 刷写后「是否生效」的判据（last_head vs 分区头部）能正确区分
 #   4) verify_dts 对未改写的 dts 必须报错
 #   5) verify_dts 对改写后的 dts 必须通过
 #   6) FORCE_SLOT 能强制指定槽位
+#   7) 不指定 FORCE_SLOT 时按单分区处理
 #
 # 用法: sh tools/test_edge.sh <模块目录> <假分区镜像> <dtc> <沙盒目录>
 
@@ -19,6 +20,7 @@ mkdir -p "$SANDBOX"
 rm -rf "$SANDBOX/mod"
 mkdir -p "$SANDBOX/mod"
 cp "$MODDIR/module.prop" "$MODDIR/common.sh" "$MODDIR/config.conf" "$SANDBOX/mod/"
+cp "$MODDIR/service.sh" "$SANDBOX/mod/"
 cp -r "$MODDIR/ref" "$SANDBOX/mod/"
 cp -r "$MODDIR/bin" "$SANDBOX/mod/"
 cp "$FAKEPART" "$SANDBOX/partition.img"
@@ -40,90 +42,66 @@ log_boot_state() { return 0; }
 pick_workdir() { _d="$SANDBOX/work"; rm -rf "$_d"; mkdir -p "$_d" || return 1; echo "$_d"; }
 prepare_dtc() { DTC="$DTC_REAL"; return 0; }
 
-# 主机上没有 /proc/uptime，boot_epoch 会退化成「当前时刻」，导致 mtime 比较
-# 出现一秒级的边界抖动。测试里固定一个开机时刻，行为才是确定的。
-boot_epoch() { echo 1800000000; }
-
 mkdir -p "$MODDIR/state" "$MODDIR/backup" "$MODDIR/logs" "$SANDBOX/work"
 
 FAILED=0
-P="$MODDIR/state/pending"
-
-# 让 pending 看起来像「上一次开机」写下的：mtime 早于固定的开机时刻
-age_pending() {
-	touch -t 202001010000 "$P" 2>/dev/null || touch -d "2020-01-01" "$P" 2>/dev/null
-}
-# 让 pending 看起来像「本次开机内」写下的：mtime 晚于固定的开机时刻
-freshen_pending() {
-	touch -t 203001010000 "$P" 2>/dev/null || touch -d "2030-01-01" "$P" 2>/dev/null
-}
+SHA_STOCK=$(sha256sum "$SANDBOX/partition.img" | cut -d' ' -f1)
 
 # ---------------------------------------------------------------- 场景 1 ----
-echo "=== 场景 1: confirmed 命中后再开机，应清除 pending ==="
-cp "$FAKEPART" "$MODDIR/backup/orig.img"
-echo "$MODDIR/backup/orig.img" > "$P"
-age_pending
-echo "boot-of-last-flash" > "$MODDIR/state/pending_boot"
-echo "TOKEN-AAA" > "$MODDIR/state/pending_id"
-echo 0 > "$MODDIR/state/pending_tries"
-echo "TOKEN-AAA" > "$MODDIR/state/confirmed"
-sha256sum "$SANDBOX/partition.img" | cut -d' ' -f1 > "$MODDIR/state/last_sha"
-boot_guard >/dev/null 2>&1
-if [ -f "$P" ]; then
-	echo "[FAIL] pending 未被清除"
+echo "=== 场景 1: 没有任何状态文件时，开机脚本不碰分区 ==="
+sh "$MODDIR/service.sh" >"$SANDBOX/svc1.log" 2>&1
+_rc=$?
+[ "$_rc" = "0" ] && echo "[ OK ] service.sh 退出码 0" || { echo "[FAIL] 退出码 $_rc"; FAILED=1; }
+_now=$(sha256sum "$SANDBOX/partition.img" | cut -d' ' -f1)
+[ "$_now" = "$SHA_STOCK" ] && echo "[ OK ] 分区未变" || { echo "[FAIL] 分区被改了"; FAILED=1; }
+if [ -f "$MODDIR/state/last_sha" ]; then
+	echo "[FAIL] 开机脚本不该产生刷写记录"
 	FAILED=1
 else
-	echo "[ OK ] pending 已清除（confirmed 命中）"
-fi
-rm -f "$MODDIR/state/confirmed" "$MODDIR/state/last_sha" "$MODDIR/state/halted" \
-      "$MODDIR/state/pending_id"
-
-# ---------------------------------------------------------------- 场景 1b ---
-echo
-echo "=== 场景 1b: confirmed 令牌不匹配，不应算作已确认 ==="
-echo "$MODDIR/backup/orig.img" > "$P"
-age_pending
-echo "TOKEN-BBB" > "$MODDIR/state/pending_id"
-echo 0 > "$MODDIR/state/pending_tries"
-echo "TOKEN-OLD" > "$MODDIR/state/confirmed"
-boot_guard >/dev/null 2>&1
-T=$(cat "$MODDIR/state/pending_tries" 2>/dev/null)
-if [ "$T" = "1" ] && [ -f "$P" ]; then
-	echo "[ OK ] 令牌不匹配时不确认（tries=1，pending 保留）"
-else
-	echo "[FAIL] tries=$T，pending 存在=$([ -f "$P" ] && echo yes || echo no)"
-	FAILED=1
+	echo "[ OK ] 没有产生刷写记录"
 fi
 
 # ---------------------------------------------------------------- 场景 2 ----
 echo
-echo "=== 场景 2: 没有 confirmed、tries 未到 3，应只跳过不回滚 ==="
-echo 0 > "$MODDIR/state/pending_tries"
-rm -f "$MODDIR/state/confirmed"
-boot_guard >/dev/null 2>&1
-T=$(cat "$MODDIR/state/pending_tries" 2>/dev/null)
-if [ "$T" = "1" ] && [ -f "$P" ]; then
-	echo "[ OK ] 已跳过且 tries=1，未回滚"
-else
-	echo "[FAIL] tries=$T"
+echo "=== 场景 2: 旧版本残留的 pending 也不会让开机脚本动手 ==="
+cp "$FAKEPART" "$MODDIR/backup/orig.img"
+echo "$MODDIR/backup/orig.img" > "$MODDIR/state/pending"
+echo "TOKEN-OLD" > "$MODDIR/state/pending_id"
+echo 2 > "$MODDIR/state/pending_tries"
+sh "$MODDIR/service.sh" >"$SANDBOX/svc2.log" 2>&1
+_now=$(sha256sum "$SANDBOX/partition.img" | cut -d' ' -f1)
+[ "$_now" = "$SHA_STOCK" ] && echo "[ OK ] 分区仍未变" || { echo "[FAIL] 残留 pending 导致分区被改"; FAILED=1; }
+if [ -f "$MODDIR/state/halted" ]; then
+	echo "[FAIL] 不该再写 halted（自动回滚已删除）"
 	FAILED=1
+else
+	echo "[ OK ] 没有 halted"
 fi
+rm -f "$MODDIR/state/pending" "$MODDIR/state/pending_id" \
+      "$MODDIR/state/pending_tries"
 
 # ---------------------------------------------------------------- 场景 3 ----
 echo
-echo "=== 场景 3: 本次开机内刚刷写，不应计数 ==="
-freshen_pending
-echo 0 > "$MODDIR/state/pending_tries"
-boot_guard >/dev/null 2>&1
-T=$(cat "$MODDIR/state/pending_tries" 2>/dev/null)
-if [ "$T" = "0" ]; then
-	echo "[ OK ] 未计数（tries 仍为 0），符合预期"
+echo "=== 场景 3: 「是否生效」判据（last_head vs 分区头部） ==="
+_head=$(dd if="$SANDBOX/partition.img" bs=1048576 count=1 2>/dev/null | sha256sum | cut -d' ' -f1)
+echo "$_head" > "$MODDIR/state/last_head"
+_cur=$(dd if="$SANDBOX/partition.img" bs=1048576 count=1 2>/dev/null | sha256sum | cut -d' ' -f1)
+if [ "$_head" = "$_cur" ]; then
+	echo "[ OK ] 一致时判定为「已生效」"
 else
-	echo "[FAIL] tries=$T，不该计数"
+	echo "[FAIL] 一致时却判成不一致"
 	FAILED=1
 fi
-rm -f "$P" "$MODDIR/state/pending_boot" "$MODDIR/state/pending_id" \
-      "$MODDIR/state/pending_tries" "$MODDIR/state/last_sha"
+# 模拟 OTA：分区头部被换掉
+printf 'STOCKXXX' | dd of="$SANDBOX/partition.img" bs=1 seek=0 conv=notrunc 2>/dev/null
+_cur2=$(dd if="$SANDBOX/partition.img" bs=1048576 count=1 2>/dev/null | sha256sum | cut -d' ' -f1)
+if [ "$_head" != "$_cur2" ]; then
+	echo "[ OK ] 被覆盖时判定为「需重新应用」"
+else
+	echo "[FAIL] 被覆盖了却仍判成一致"
+	FAILED=1
+fi
+rm -f "$MODDIR/state/last_head"
 
 # ---------------------------------------------------------------- 场景 4 ----
 echo
@@ -133,7 +111,8 @@ rm -rf "$W2"; mkdir -p "$W2"
 WORK="$W2"
 build_runtime_rules >/dev/null 2>&1
 # split_dtbs 会用 PSIZE 校验总长度，前面不再经过 run_main，这里要自己补上
-PSIZE=$(wc -c < "$SANDBOX/partition.img" | tr -d ' \t\r\n')
+PSIZE=$(wc -c < "$FAKEPART" | tr -d ' \t\r\n')
+cp "$FAKEPART" "$SANDBOX/partition.img"
 split_dtbs "$SANDBOX/partition.img" >/dev/null 2>&1 || { echo "[FAIL] 无法拆出 DTB"; exit 1; }
 STOCK=""
 _n=0

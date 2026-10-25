@@ -145,9 +145,7 @@ echo "== 模块状态 =="
 expect "$OUT" module_version "v9.9.9"
 expect "$OUT" module_author "Tester"
 expect "$OUT" state_last_sha "abc123def456"
-expect "$OUT" state_pending "$MOD/backup/dtbo_a_x.img"
-expect "$OUT" state_pending_tries 1
-expect "$OUT" state_halted 0
+expect "$OUT" state_boot_time ""
 expect "$OUT" backup_file "$MOD/backup/dtbo_a_new.img"
 expect "$OUT" backup_size 8192
 expect "$OUT" backup_count 2
@@ -155,6 +153,20 @@ expect "$OUT" cfg_ffc_low 0
 expect "$OUT" cfg_ffc_high 56
 expect "$OUT" cfg_dry_run 0
 expect "$OUT" cfg_tier max
+
+# 开机确认已删除：不该再输出这些字段
+for gone in state_pending state_pending_id state_pending_tries state_confirmed state_halted; do
+	if grep -q "^$gone=" "$OUT" 2>/dev/null; then
+		bad "不该再输出 $gone（开机确认已删除）"
+	else
+		ok "不再输出 $gone"
+	fi
+done
+
+# service.sh 会写 state/boot_time，页面按需读取
+printf '%s\n' "1792927782" > "$MOD/state/boot_time"
+SYSFS_ROOT="$SYS" MODDIR="$MOD" sh "$MODDIR_SRC/monitor.sh" > "$SB/out_bt.txt" 2>&1
+expect "$SB/out_bt.txt" state_boot_time 1792927782
 
 echo "== 充电日志字段 =="
 expect "$OUT" log_dir "/data/adb/dtbo_charge_unlock/chargelog"
@@ -203,11 +215,22 @@ expect "$SB/out2.txt" capacity ""
 expect "$SB/out2.txt" module_version "v9.9.9"
 mv "$PS/battery.off" "$PS/battery"
 
-echo "== halted 按文件存在判定 =="
+echo "== 残留的旧状态文件不影响输出 =="
+# 旧版本会写 halted / pending，现在既不该输出也不该影响任何判断
 printf '%s\n' "rolled-back 2026-01-01 00:00:00" > "$MOD/state/halted"
-SYSFS_ROOT="$SYS" MODDIR="$MOD" sh "$MODDIR_SRC/monitor.sh" > "$SB/out3.txt" 2>&1
-expect "$SB/out3.txt" state_halted 1
-rm -f "$MOD/state/halted"
+printf '%s\n' "/some/backup.img" > "$MOD/state/pending"
+SYSFS_ROOT="$SYS" MODDIR="$MOD" sh "$MODDIR_SRC/monitor.sh" --full > "$SB/out3.txt" 2>&1
+rc3=$?
+[ "$rc3" = "0" ] && ok "有残留文件也能正常跑" || bad "退出码 $rc3"
+# 上面最后一个用例把分区改成了原厂内容，这里按当前状态重新算期望值
+_cur_now=$(dd if="$PRT" bs=1048576 count=1 2>/dev/null | sha256sum | cut -d' ' -f1)
+expect "$SB/out3.txt" state_cur_head "$_cur_now"
+if grep -q '^state_halted=' "$SB/out3.txt" 2>/dev/null; then
+	bad "不该再输出 state_halted"
+else
+	ok "残留 halted 不再出现在输出里"
+fi
+rm -f "$MOD/state/halted" "$MOD/state/pending"
 
 echo ""
 if [ "$fail" -eq 0 ]; then

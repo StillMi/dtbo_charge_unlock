@@ -158,7 +158,16 @@ prune() {
 }
 
 begin_session() {
-	_name=$(date '+%Y%m%d-%H%M%S').log
+	_base=$(date '+%Y%m%d-%H%M%S')
+	_name="$_base.log"
+	# 同一秒内先结束一个会话、紧接着又开一个（插拔很快）时，文件名会撞上，
+	# 用 > 写入就把上一个会话截断了。加后缀避开重名，绝不覆盖已有会话。
+	_n=1
+	while [ -f "$LOGDIR/$_name" ]; do
+		_name="$_base-$_n.log"
+		_n=$((_n + 1))
+		[ "$_n" -gt 99 ] && break
+	done
 	_f="$LOGDIR/$_name"
 	{
 		printf '#dtbo-chargelog v2\n'
