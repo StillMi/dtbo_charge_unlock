@@ -32,7 +32,19 @@ fi
 [ -n "$IMG" ] && [ -f "$IMG" ] || die "找不到备份镜像（$BACKUP/ 下没有 .img）"
 
 # ---- 槽位与分区 ----
-SLOT=$(getprop ro.boot.slot_suffix 2>/dev/null)
+# 和 common.sh 保持一致：config.conf 里设了 FORCE_SLOT 就照它来，
+# 否则看当前系统槽位。两边认的槽位不一样就会写错分区。
+_FORCE_SLOT=""
+if [ -f "$MODDIR/config.conf" ]; then
+	_FORCE_SLOT=$(sed -n 's/^[[:space:]]*FORCE_SLOT[[:space:]]*=[[:space:]]*//p' \
+		"$MODDIR/config.conf" 2>/dev/null | tail -n1 | tr -d '" \t\r\n')
+fi
+case "$_FORCE_SLOT" in
+	a|b) SLOT="_$_FORCE_SLOT" ;;
+	*)
+		SLOT=$(getprop ro.boot.slot_suffix 2>/dev/null)
+		;;
+esac
 case "$SLOT" in
 	_a|_b) NAME="dtbo$SLOT" ;;
 	*)     NAME="dtbo" ;;
@@ -55,8 +67,29 @@ echo "备份镜像 : $IMG ($ISZ 字节)"
 echo "目标分区 : $PART -> $REAL ($PSIZE 字节)"
 [ "$ISZ" -le "$PSIZE" ] 2>/dev/null || die "备份镜像比分区大，拒绝写入"
 
+# ---- 这份备份还对得上当前系统吗？----
+# 备份是「上一次刷写时抓的原厂镜像」。如果这中间系统 OTA 过，分区早就不是
+# 本模块刷入的那一份了，把旧备份写回去等于给新系统塞了个旧固件的 dtbo。
+STALE=0
+if [ -f "$STATE/last_sha" ]; then
+	_WANT=$(cat "$STATE/last_sha" 2>/dev/null)
+	_CUR=$(dd if="$PART" bs=1048576 2>/dev/null | sha256sum 2>/dev/null | cut -d' ' -f1)
+	if [ -n "$_WANT" ] && [ -n "$_CUR" ] && [ "$_WANT" != "$_CUR" ]; then
+		STALE=1
+		echo ""
+		echo "警告: 当前 dtbo 分区已经不是本模块刷入的那一份了（系统大概 OTA 过）。"
+		echo "      这份备份属于上一个系统版本，写回去可能和当前系统对不上。"
+		echo "      更稳的做法是用 fastboot 刷入当前系统版本的官方 dtbo。"
+		echo ""
+	fi
+fi
+
 if [ "$ASSUME_YES" != "1" ]; then
-	printf "确认把备份写回 %s ? [y/N] " "$NAME"
+	if [ "$STALE" = "1" ]; then
+		printf "备份与当前系统可能不匹配，仍然写回 %s ? [y/N] " "$NAME"
+	else
+		printf "确认把备份写回 %s ? [y/N] " "$NAME"
+	fi
 	read -r ans
 	case "$ans" in
 		y|Y|yes|YES) ;;

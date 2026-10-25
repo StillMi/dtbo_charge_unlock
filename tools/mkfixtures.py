@@ -154,19 +154,33 @@ def main():
     stock = open(stock_dtb, "rb").read()
     ref = open(ref_dtb, "rb").read()
 
+    # 「别的板型」：完全不含充电节点，用来填充 dtbo 表里的其他条目。
+    # 真机上 dtbo 分区里的每个条目对应一个板型，它们的原厂取值都不会等于
+    # 我们的目标值 —— 所以不能拿 ref.dtb（目标镜像）去填，那会造出一个
+    # 「原厂就已经是改好状态」的假分区，测出来的东西没有意义。
+    other_dts = os.path.join(out, "other.dts")
+    with open(other_dts, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write("/dts-v1/;\n\n/ {\n\tmodel = \"other-board\";\n"
+                 "\tcompatible = \"qcom,other\";\n\t#address-cells = <2>;\n"
+                 "\t#size-cells = <2>;\n\n\tchosen {\n\t\tbootargs = \"\";\n\t};\n};\n")
+    other_dtb = os.path.join(out, "other.dtb")
+    run(dtc, "-@", "-I", "dts", "-O", "dtb", "-o", other_dtb, other_dts)
+    other = open(other_dtb, "rb").read()
+    print("other.dtb    %d 字节（不含充电节点）" % len(other))
+
     part1 = os.path.join(out, "part_stock.img")
     pad(part1, stock)
     print("part_stock.img   %d 字节（裸 DTB 单段）" % os.path.getsize(part1))
 
     part2 = os.path.join(out, "part_two.img")
-    pad(part2, stock + ref)
+    pad(part2, stock + other)
     print("part_two.img     %d 字节（裸 DTB 双段串接）" % os.path.getsize(part2))
 
     # 真实设备用的格式：DTBO 表，多个 dtb 对应不同板型
     tbl = build_dtbo_table([
         (stock, 0x0000, 0),
         (stock, 0x0001, 0),
-        (ref,   0x0002, 0),
+        (other, 0x0002, 0),
     ])
     part3 = os.path.join(out, "part_dtbo.img")
     pad(part3, tbl)
@@ -178,16 +192,6 @@ def main():
     print("part_dtbo1.img   %d 字节（DTBO 表，单条目）" % os.path.getsize(part4))
 
     # 混合：部分条目是「别的板型」，根本不含充电节点
-    other_dts = os.path.join(out, "other.dts")
-    with open(other_dts, "w", encoding="utf-8", newline="\n") as fh:
-        fh.write("/dts-v1/;\n\n/ {\n\tmodel = \"other-board\";\n"
-                 "\tcompatible = \"qcom,other\";\n\t#address-cells = <2>;\n"
-                 "\t#size-cells = <2>;\n\n\tchosen {\n\t\tbootargs = \"\";\n\t};\n};\n")
-    other_dtb = os.path.join(out, "other.dtb")
-    run(dtc, "-@", "-I", "dts", "-O", "dtb", "-o", other_dtb, other_dts)
-    other = open(other_dtb, "rb").read()
-    print("other.dtb    %d 字节（不含充电节点）" % len(other))
-
     part5 = os.path.join(out, "part_dtbo_mixed.img")
     pad(part5, build_dtbo_table([
         (other, 0x0000, 0),

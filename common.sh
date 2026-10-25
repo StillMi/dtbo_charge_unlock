@@ -22,8 +22,6 @@
 #   * 刷写前先「重新打包 -> 反编译 -> 逐条比对」，任何一条不通过就中止，
 #     分区保持原样
 #   * 刷写后回读分区比对 sha256，不一致立即回滚
-#   * 记录「刷入后尚未确认开机成功」标记；若连续两次开机都没走完，
-#     自动回滚原始镜像并停用本模块（防变砖循环）
 #   * 已刷过的镜像按哈希识别，重复手动运行不会多刷一遍
 # ============================================================================
 
@@ -763,19 +761,42 @@ build_runtime_rules() {
 }
 
 # 逐条核对：目标节点里每个属性都必须是我们期望的取值
+#
+# 参数 2 是改写前的 dts。dtbo 表里一个条目对应一个板型，不同板型带的
+# 充电节点并不完全一样（比如有的条目只有 mca_charger_thermal，没有
+# mca_buckchg_jeita）。所以：
+#   * 改写前就没有这个节点 -> 这个板型本来不带它，跳过
+#   * 改写前有、改写后没了  -> 真出问题，报 LOST NODE
+# 这样厂商 OTA 调整了条目划分也不会误判成失败。
 verify_dts() {
 	_dts="$1"
+	_src="${2:-}"
 	_bad=0
+	_checked=0
+	_skipped=0
 	for _f in "$WORK"/expect/*.txt; do
 		_node=${_f##*/}
 		_node=${_node%.txt}
 		sed -n "/^[[:space:]]*\([^[:space:]:]*:[[:space:]]*\)\{0,1\}${_node}[[:space:]]*{/,/^[[:space:]]*};/p" \
 			"$_dts" > "$WORK/block.dts" 2>/dev/null
 		if [ ! -s "$WORK/block.dts" ]; then
-			echo "MISSING NODE $_node" >&2
-			_bad=1
+			if [ -n "$_src" ] && [ -f "$_src" ]; then
+				sed -n "/^[[:space:]]*\([^[:space:]:]*:[[:space:]]*\)\{0,1\}${_node}[[:space:]]*{/,/^[[:space:]]*};/p" \
+					"$_src" > "$WORK/block.src.dts" 2>/dev/null
+				if [ -s "$WORK/block.src.dts" ]; then
+					echo "LOST NODE $_node" >&2
+					_bad=1
+				else
+					_skipped=$((_skipped + 1))
+				fi
+				rm -f "$WORK/block.src.dts"
+			else
+				echo "MISSING NODE $_node" >&2
+				_bad=1
+			fi
 			continue
 		fi
+		_checked=$((_checked + 1))
 		while IFS= read -r _want; do
 			[ -n "$_want" ] || continue
 			if ! grep -qF "$_want" "$WORK/block.dts" 2>/dev/null; then
@@ -785,6 +806,11 @@ verify_dts() {
 		done < "$_f"
 	done
 	rm -f "$WORK/block.dts"
+	if [ "$_checked" -lt 1 ]; then
+		echo "没有可核对的节点（这个条目里一个目标充电节点都没有）" >&2
+		return 1
+	fi
+	[ "$_skipped" -gt 0 ] && log "  该板型不带 $_skipped 个节点，已跳过（正常）"
 	return $_bad
 }
 
@@ -866,6 +892,7 @@ run_main() {
 	_i=0
 	_outs=""
 	_nopat=0
+	_nalr=0
 	while [ "$_i" -lt "$CNT" ]; do
 		log "---- DTB #$_i ----"
 
@@ -877,11 +904,21 @@ run_main() {
 			|| { die "DTB #$_i 改写 dts 失败"; return 1; }
 
 		# dtbo 表里通常有多个板型条目，只有当前机型的那个含这些充电节点。
-		# 改写后与原文件完全相同 -> 这个条目不含目标节点，原样保留，不算错误。
+		# 改写后与原文件完全相同有两种可能，必须分开统计：
+		#   a) 这个条目根本不含目标充电节点     -> _nopat（正常，原样保留）
+		#   b) 含目标节点、但取值已经是目标值   -> _nalr（说明分区本来就是本模块
+		#      刷过的，典型场景是升级模块后 state/ 被换掉了）
+		# 这两种都原样保留，但只有 (a) 能说明「当前分区还是原厂」。
 		if cmp -s "$WORK/$_i.dts" "$WORK/$_i.patched.dts"; then
-			log "  该条目不含目标充电节点（改写无变化），原样保留"
+			if grep -qE 'mca_charger_thermal|mca_buckchg_jeita|mca_strategy_(buckchg_class|quick_charge)' \
+				"$WORK/$_i.dts" 2>/dev/null; then
+				log "  该条目已经是目标状态（改写无变化），原样保留"
+				_nalr=$((_nalr + 1))
+			else
+				log "  该条目不含目标充电节点（改写无变化），原样保留"
+				_nopat=$((_nopat + 1))
+			fi
 			_outs="$_outs $WORK/dtb.$_i"
-			_nopat=$((_nopat + 1))
 			_i=$((_i + 1))
 			continue
 		fi
@@ -896,7 +933,8 @@ run_main() {
 			|| { die "DTB #$_i 复核失败：新镜像无法反编译"; return 1; }
 
 		# 复核二：目标属性全部存在且取值与预期一致
-		if verify_dts "$WORK/$_i.check.dts"; then
+		# 传改写前的 dts，好区分「这个板型本来就没有这个节点」和「节点被弄丢了」
+		if verify_dts "$WORK/$_i.check.dts" "$WORK/$_i.dts"; then
 			log "  复核通过：充电限制参数全部匹配"
 		else
 			die "DTB #$_i 复核失败：充电限制参数与预期不一致（详见上方 MISMATCH/MISSING）"
@@ -907,12 +945,40 @@ run_main() {
 		_i=$((_i + 1))
 	done
 
-	_done=$((CNT - _nopat))
+	_done=$((CNT - _nopat - _nalr))
 	if [ "$_done" -lt 1 ]; then
+		if [ "$_nalr" -gt 0 ]; then
+			# 分区里的充电参数已经是目标值了 —— 只可能是我们自己刷过、但状态文件
+			# 丢了（升级模块会把整个目录换掉）。这时候不该报错，也不该重刷，
+			# 只要把状态补记回去，下次就能正常跳过。
+			log "当前 dtbo 的充电参数已经是本模块的目标值（$_nalr 个条目无需改写）。"
+			log "  大概是升级模块后状态文件丢了，这里补记状态，不重复刷写。"
+			[ -n "$ORIG_SHA" ] && echo "$ORIG_SHA" > "$STATE/last_sha"
+			echo "$ORIG_SHA" > "$STATE/orig_sha"
+			echo "$PART" > "$STATE/part"
+			echo "$_hi_now" > "$STATE/flash_high"
+			_head=$(dd if="$ORIG" bs=1048576 count=1 2>/dev/null | sha256sum 2>/dev/null | cut -d' ' -f1)
+			[ -n "$_head" ] && echo "$_head" > "$STATE/last_head"
+			log "=========== 结束（无需刷写） ==========="
+			return 0
+		fi
 		die "全部 $CNT 个 DTB 条目都不含目标充电节点，当前 dtbo 与本模块的参考表不匹配，未做任何修改"
 		return 1
 	fi
 	[ "$_nopat" -gt 0 ] && log "其中 $_nopat 个条目不含目标节点，已原样保留；实际改写 $_done 个"
+
+	# ---- 当前分区还是原厂的吗？----
+	# 备份必须是「原厂镜像」才有意义。可是升级模块时管理会把整个模块目录
+	# 换掉，state/ 和 backup/ 一起没了，只看 state/last_sha 已经判断不出来。
+	# 判据就在上面的循环里：只要有一个条目「含目标节点但已是目标值」，就说明
+	# 分区里已经混着本模块写过的内容，这份镜像不能再当原厂备份。
+	# （不能靠「某个条目里 mca_charger_thermal 是 disabled」来判 —— dtbo 表里
+	#  别的板型条目本来就可能是别的取值，那会误判成「不是原厂」。）
+	if [ "$_nalr" -gt 0 ]; then
+		_orig_stock=0
+	else
+		_orig_stock=1
+	fi
 
 	if ! pack_image "$WORK/new.img" $_outs; then
 		die "拼装分区镜像失败（新镜像超过分区容量 $PSIZE 字节？）"
@@ -940,13 +1006,41 @@ run_main() {
 	[ -n "$NEW_SHA" ] || { die "无法计算 sha256，拒绝刷写"; return 1; }
 
 	# ---- 备份原始镜像 ----
-	BK="$BACKUP/dtbo${SLOT}_$(date '+%Y%m%d-%H%M%S').img"
-	cp "$ORIG" "$BK" || { die "备份原始镜像失败，拒绝刷写"; return 1; }
-	if [ "$(sha256_of "$BK")" != "$ORIG_SHA" ]; then
-		die "备份校验失败，拒绝刷写"
-		return 1
+	# 只有当前分区确实是原厂的，这份备份才有资格叫「原厂镜像」。
+	# 如果分区已经是我们刷过的（典型场景：升级模块后目录被换掉、state 没了，
+	# 用户又点了一次「运行修改」），就沿用已有的原厂备份，绝不拿改过的镜像
+	# 去覆盖它 —— 否则 restore.sh 会把改过的镜像当成原厂写回去。
+	BK=""
+	if [ "$_orig_stock" = "1" ]; then
+		BK="$BACKUP/dtbo${SLOT}_$(date '+%Y%m%d-%H%M%S').img"
+		cp "$ORIG" "$BK" || { die "备份原始镜像失败，拒绝刷写"; return 1; }
+		if [ "$(sha256_of "$BK")" != "$ORIG_SHA" ]; then
+			die "备份校验失败，拒绝刷写"
+			return 1
+		fi
+		log "原始镜像已备份: $BK"
+
+		# 每份备份都是一个完整分区（这台机器 32MB），只留最近 3 份。
+		# 不清理的话，反复 OTA + 重刷会把数据分区慢慢吃满。
+		_n=0
+		ls -1t "$BACKUP"/*.img 2>/dev/null | while IFS= read -r _f; do
+			_n=$((_n + 1))
+			[ "$_n" -le 3 ] && continue
+			[ "$_f" = "$BK" ] && continue
+			rm -f "$_f" 2>/dev/null && log "  清理旧备份: ${_f##*/}"
+		done
+	else
+		_old=""
+		[ -f "$STATE/backup" ] && _old=$(cat "$STATE/backup" 2>/dev/null)
+		if [ -n "$_old" ] && [ -f "$_old" ]; then
+			BK="$_old"
+			log "当前分区已经是本模块刷入的版本，沿用原有的原厂备份: $BK"
+		else
+			log "注意: 当前分区已经是本模块刷入的版本，但找不到原厂备份。"
+			log "      这次不生成新备份（把改过的镜像当原厂存下来会误导 restore.sh）。"
+			log "      要真正回到原厂，请刷入对应系统版本的官方 dtbo。"
+		fi
 	fi
-	log "原始镜像已备份: $BK"
 
 	# ---- 刷写 ----
 	# 不再写 pending / pending_id / pending_tries 之类的「等待开机确认」标记：
@@ -963,9 +1057,13 @@ run_main() {
 	_back=$(read_partition_sha)
 	if [ "$_back" != "$NEW_SHA" ]; then
 		log "回读校验失败（回读 ${_back:-空} != 写入 $NEW_SHA），立即回滚 ..."
-		dd if="$BK" of="$PART" bs=1048576 conv=fsync 2>/dev/null
-		sync
-		die "写入后校验不一致，已回滚原始镜像"
+		if [ -n "$BK" ] && [ -f "$BK" ]; then
+			dd if="$BK" of="$PART" bs=1048576 conv=fsync 2>/dev/null
+			sync
+			die "写入后校验不一致，已回滚原始镜像"
+		else
+			die "写入后校验不一致，而且没有可用的原厂备份，请用 fastboot 刷回官方 dtbo"
+		fi
 		return 1
 	fi
 	log "回读校验通过"
@@ -973,7 +1071,11 @@ run_main() {
 	echo "$NEW_SHA" > "$STATE/last_sha"
 	echo "$ORIG_SHA" > "$STATE/orig_sha"
 	echo "$PART" > "$STATE/part"
-	echo "$BK" > "$STATE/backup"
+	if [ -n "$BK" ]; then
+		echo "$BK" > "$STATE/backup"
+	else
+		rm -f "$STATE/backup"
+	fi
 	# 记下这次刷入用的温度档位，用来判断「只改了档位」时要不要重新刷
 	echo "$_hi_now" > "$STATE/flash_high"
 

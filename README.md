@@ -118,7 +118,7 @@
 ## 二、安装与使用
 
 1. **先按上面那节把 Scene 温控改成「丧心病狂」**，否则装了也不一定有效。
-2. 用 KernelSU（或 Magisk）安装 `dtbo_charge_unlock-v1.10.0.zip`。
+2. 用 KernelSU（或 Magisk）安装 `dtbo_charge_unlock-v1.11.0.zip`。
    **安装过程中就会刷写**，安装界面能看到完整过程与结果。
    从 v1.9.0 及更早版本升级上来时，安装脚本会自动清掉旧版的
    `post-fs-data.sh` 和 `pending` / `confirmed` / `halted` 状态文件
@@ -171,10 +171,15 @@ su -c "sh /data/adb/modules/dtbo_charge_unlock/action.sh"
 2. 打开 KernelSU → 本模块 → 点 **「操作」**；或点进模块打开 **WebUI →「运行修改」**；
 3. 看到刷写成功后**再重启一次**，新 `dtbo` 才生效。
 
-WebUI 会帮你判断：状态显示 **需重新应用**、「分区一致」显示
+WebUI 会帮你判断：状态显示 **需重新应用**、「是否生效」显示
 **否（已被覆盖）**，就说明当前分区不是本模块写的了。
 
 模块不会在开机时偷偷帮你改回去 —— 这是有意的：写分区是需要你知道的操作。
+
+> 系统更新改了 `dtbo` 里**跟充电无关**的部分（新增节点、改别的板型、调整条目
+> 布局）不影响使用：模块只改那 7 个充电节点，其余内容原样保留。真正会失败的
+> 只有一种情况 —— 厂商把充电节点的名字或结构整个换掉了，那时日志里会明确写出
+> 「全部 N 个 DTB 条目都不含目标充电节点」，分区不会被写入。
 
 ### 在 KernelSU 里看充电状态（WebUI）
 
@@ -248,10 +253,12 @@ WebUI 会帮你判断：状态显示 **需重新应用**、「分区一致」显
 | 机制 | 说明 |
 | --- | --- |
 | 只手动触发 | 只有安装时、以及手动点「操作」/「运行修改」时才写分区；开机阶段绝不自动刷写 |
-| 备份 | 刷写前把整个分区备份到 `backup/dtbo_a_YYYYmmdd-HHMMSS.img`，并校验备份完整 |
+| 备份 | 刷写前把整个分区备份到 `backup/dtbo_a_YYYYmmdd-HHMMSS.img`，并校验备份完整；只留最近 3 份（每份就是一个完整分区） |
+| 不乱认原厂 | 只有确认当前分区还是原厂时才生成新备份；发现分区里已经是本模块写过的内容（升级模块后 `state/` 丢了就是这种情况）就沿用旧备份，绝不把改过的镜像当原厂存下来 |
 | 刷前复核 | 新镜像必须能反编译回来，且 174 项参数逐条匹配，否则中止 |
 | 刷后回读 | 写入后回读分区比对 sha256，不一致立刻回滚 |
 | 重复运行不白刷 | 镜像和档位都没变时直接跳过；只改了档位会自动重刷 |
+| 容得下系统更新 | 厂商在 `dtbo` 里改别的部分（新增节点、条目数变化、把充电节点拆到不同条目）都能正常跑通；不含充电节点的条目原样保留、一个字节不动 |
 | 安装失败不阻断 | 安装阶段刷写失败（例如分区只读）时模块照常装好，可手动再跑一次；想直接中止可设 `ABORT_ON_INSTALL_FAIL=1` |
 | 生效自检 | 记下刷入镜像开头 1MB 的哈希，WebUI 每次打开都回读当前分区比对，不一致就提示「需重新应用」 |
 
@@ -271,6 +278,11 @@ WebUI 会帮你判断：状态显示 **需重新应用**、「分区一致」显
 ```sh
 su -c "sh /data/adb/modules/dtbo_charge_unlock/restore.sh"
 ```
+
+`restore.sh` 写回的是**上一次刷写时抓的原厂备份**。如果这中间系统 OTA 过，
+分区早就不是本模块刷入的那一份了，旧备份和新系统可能对不上 —— 它会先比对
+`state/last_sha` 与当前分区，不一致就打印警告并要求再确认一次。这种情况
+更稳的做法是用 fastboot 刷入当前系统版本的官方 `dtbo`。
 
 紧急情况下也可以用 fastboot 刷回备份：
 
@@ -398,10 +410,24 @@ sh tools/test_key.sh     . build/sb_key          # 事件行解析 + tier_pick �
 sh tools/test_tier.sh    . build/part_dtbo.img /path/to/dtc build/tier
                          # 两个档位真的写进 dtbo：ffc_temp_high = <0x30> / <0x38>
 
-# 2d) WebUI 采集脚本自测（造一棵假 sysfs，检查每个输出字段）
+# 2d) 系统更新过 dtbo（充电部分没变）也要能跑通
+python tools/mkdrift.py . /path/to/dtc build    # 造 4 个「OTA 改过」镜像
+for f in part_dtbo_drift part_dtbo_drift_extra \
+         part_dtbo_drift_split part_dtbo_drift_nocharge; do
+	sh tools/test_drift.sh . build/$f.img /path/to/dtc build/sb_$f
+done
+# 充电节点被拆到不同条目、条目数变了、有条目完全没充电节点 —— 都要能跑通，
+# 且不含充电节点的条目一个字节都不许动
+
+# 2e) 升级模块后 state 丢了、分区已经是自己刷过的
+sh tools/test_reflash.sh . build/part_dtbo.img /path/to/dtc build/sb_reflash
+                         # 先刷一遍，删掉 state/ 和 backup/ 再跑：
+                         # 必须认出「已是目标值」、不重复刷写、不造假备份
+
+# 2f) WebUI 采集脚本自测（造一棵假 sysfs，检查每个输出字段）
 sh tools/test_monitor.sh   . build/sb_mon
 
-# 2e) 充电日志进程自测（假 sysfs，模拟插拔、中断、淘汰）
+# 2g) 充电日志进程自测（假 sysfs，模拟插拔、中断、淘汰）
 sh tools/test_chargelog.sh . build/sb_clog
 
 # 3) 重新生成改写规则（换了参考 dts 才需要）
@@ -409,7 +435,7 @@ python tools/gen_ref.py  <参考.dts> ref
 python tools/gen_sed.py  ref/patch.list ref
 
 # 4) 打包（内置编码检查，有 CRLF / BOM 会直接拒绝）
-python tools/package.py  . dist/dtbo_charge_unlock-v1.10.0.zip
+python tools/package.py  . dist/dtbo_charge_unlock-v1.11.0.zip
 ```
 
 WebUI 的页面逻辑也可以在 PC 上验证，不需要设备。做法是造一个假的 `ksu`
@@ -456,6 +482,8 @@ python tools/webui_scenarios.py . build/wsc "<浏览器路径>" build/monitor_sa
 | `test_chargelog.sh` | 充电日志后台进程：没插电不建会话、插电建会话、**11 个字段**（含功率/充电器电压/限流/充电器温度）、继续采样、拔出收尾、`status` 兜底、异常中断补 `#aborted`、重复启动、`CHARGELOG=0` 关闭、`monitor.sh --logs/--log` 输出（含功率/电压/电流峰值）、路径穿越被拒、超出 `CHARGELOG_MAX` 淘汰最旧 |
 | `test_key.sh` | 音量键解析（按下/抬起/无关事件/多行）与 `tier_pick` 各分支：音量下→48、音量上→56、不按、`FORCE_TIER` 合法/乱填、`TIER_PROMPT=0` |
 | `test_tier.sh` | 逐个档位跑完整安装，再把刷好的分区拆出来反编译，确认 `ffc_temp_high = <0x30>/<0x38>` 与 JEITA 高温边界真的是 48/56，**并确认另一个档位的取值没有残留**（防止只改了一半） |
+| `test_drift.sh` | **系统更新过 dtbo、充电部分没变**：厂商在别处塞了新节点（整份 dtb 字节全变）、条目数变了、充电节点被拆散到不同条目、中间有条目完全没充电节点 —— 四种情况都要跑通；不含充电节点的条目**一个字节都不许动**；无关新节点不能被冲掉；条目数不能变 |
+| `test_reflash.sh` | **升级模块后 `state/` 丢了、分区已经是自己刷过的**：先正常刷一遍，删掉 `state/` 与 `backup/` 再跑 —— 必须认出「已是目标值」、不重复刷写、分区不变、**绝不把改过的镜像当原厂备份存下来**，并把状态补记回去 |
 
 辅助脚本：
 
