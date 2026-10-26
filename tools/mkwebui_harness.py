@@ -38,6 +38,9 @@ STUB = """<script>
     return variant(BASE, i);
   }
 
+  /* 断言「空日志列表不能卡在读取中」时要把 LOGS 换成空的，所以留个口子 */
+  window.__setLogs = function (v) { LOGS = v; };
+
   window.__errors = [];
   window.__calls = [];
   window.onerror = function (m, s, l, c, err) {
@@ -165,11 +168,21 @@ font:11px/1.55 monospace;white-space:pre-wrap">check 未运行</pre>
     var L = window.__log || {};
     chk('标签页有两个', L.tabs === 2, 'tabs=' + L.tabs);
     chk('切到充电日志', L.switched === true, 'switched=' + L.switched);
-    chk('日志状态已填', /记录中|未记录/.test(L.chip || ''), L.chip);
+    chk('日志状态已填', /记录中|未在记录/.test(L.chip || ''), L.chip);
+    chk('日志状态说明已填', (L.hint || '').length > 6, L.hint);
+    chk('记录中说明含文件名', /正在记录这次充电/.test(L.hint || ''), L.hint);
     chk('日志采样间隔已填', /^\\d+$/.test(L.intv || ''), L.intv);
     chk('记录中不显示启动按钮', L.startHidden === true, 'hidden=' + L.startHidden);
     chk('日志列表有行', (L.rows || 0) >= 2, 'rows=' + L.rows);
     chk('列表显示峰值功率', /峰值 \\d/.test(L.listSub || ''), L.listSub);
+    chk('未结束会话显示进行中', /进行中/.test(L.listSub || ''), L.listSub);
+    /* 空列表：后台在跑但一次都没记过 —— 不能停在「读取中…」 */
+    chk('空列表不卡在读取中',
+        L.emptyRows === 1 && /还没有记录/.test(L.emptyText || '')
+        && !/读取中/.test(L.emptyText || ''),
+        (L.emptyRows + '|' + (L.emptyText || '')).slice(0, 70));
+    chk('空列表说明没插充电器', /没插充电器/.test(L.emptyHint || ''), L.emptyHint);
+    chk('空列表状态标签', /记录中|未在记录/.test(L.emptyChip || ''), L.emptyChip);
     chk('打开会话', L.opened === true && L.title !== '—', L.title);
     chk('会话统计已填', (L.stats || 0) >= 9, 'rows=' + L.stats);
     chk('会话含平均功率', /平均功率/.test(L.statsText || ''), '');
@@ -208,7 +221,7 @@ font:11px/1.55 monospace;white-space:pre-wrap">check 未运行</pre>
     document.getElementById('__check').textContent = r.join('\\n');
   }
 
-  setTimeout(run, 12000);
+  setTimeout(run, 14000);
 })();
 </script>
 """
@@ -267,7 +280,9 @@ TABS = """<script>
                            paintedV: 0, paintedC: 0, paintedT: 0,
                            peaks: '', back: false, done: false, listSub: '',
                            statsText: '', intv: '', startHidden: false,
-                           thermalSame: false, rawKept: false, rawLen: 0 };
+                           emptyRows: -1, emptyText: '', emptyHint: '',
+                           emptyChip: '', hint: '', thermalSame: false,
+                           rawKept: false, rawLen: 0 };
 
   function txt(id) {
     var e = document.getElementById(id);
@@ -287,10 +302,11 @@ TABS = """<script>
     } catch (e) { return -1; }
   }
 
+  var logsBtn = null, liveBtn = null;
+
   function step1() {
     var btns = document.querySelectorAll('[data-tab]');
     L.tabs = btns.length;
-    var logsBtn = null, liveBtn = null;
     for (var i = 0; i < btns.length; i++) {
       var t = btns[i].getAttribute('data-tab');
       if (t === 'logs') logsBtn = btns[i];
@@ -304,6 +320,7 @@ TABS = """<script>
       L.switched = !hidden('viewLogs') && hidden('viewLive');
       L.chip = txt('logStateChip');
       L.intv = txt('logInterval');
+      L.hint = txt('logHintText');
       L.startHidden = hidden('logStartBox');
       var ul = document.getElementById('logList');
       L.rows = ul ? ul.children.length : 0;
@@ -331,6 +348,8 @@ TABS = """<script>
         setTimeout(function () {
           L.back = hidden('logDetail');
           if (liveBtn) liveBtn.click();
+          /* 性能断言必须紧接在回到实时页之后跑，窗口里不能有别的刷新
+             （「运行修改」收尾那次 refresh(true) 会把时间窗污染掉）。 */
           setTimeout(checkPerf, 300);
         }, 500);
       }, 600);
@@ -338,6 +357,27 @@ TABS = """<script>
   }
 
   function txt2(el) { return el ? (el.textContent || '').trim() : ''; }
+
+  /* 第三轮：日志列表换成空的（后台在跑、没插充电器、一次都没记过），
+     看列表会不会卡在「读取中…」。这是用户实际遇到的那个状态。 */
+  function phaseEmpty(logsBtn, liveBtn) {
+    window.__setLogs('log_dir=/data/adb/dtbo_charge_unlock/chargelog\\n'
+      + 'log_interval=10\\nlog_count=0\\nlog_current=\\n'
+      + 'log_running=1\\nlog_plugged=0\\nlog.list_count=0\\n');
+    if (liveBtn) liveBtn.click();
+    setTimeout(function () {
+      if (logsBtn) logsBtn.click();
+      setTimeout(function () {
+        var u2 = document.getElementById('logList');
+        L.emptyRows = u2 ? u2.children.length : -1;
+        L.emptyText = (u2 && u2.children[0]) ? txt2(u2.children[0]) : '';
+        L.emptyHint = txt('logHintText');
+        L.emptyChip = txt('logStateChip');
+        if (liveBtn) liveBtn.click();
+        L.done = true;
+      }, 900);
+    }, 400);
+  }
 
   /* 性能断言：连续两次采集后，温度列表的节点还是同一批（没有重建），
      折叠的原始数据也没被反复重写。 */
@@ -361,7 +401,7 @@ TABS = """<script>
       L.thermalSame = (before === after) && before !== null;
       L.rawWrites = rawWrites;
       L.rawKept = (rawWrites === 0);
-      L.done = true;
+      phaseEmpty(logsBtn, liveBtn);
     }, 2600);
   }
 
@@ -392,9 +432,12 @@ def fake_fixtures(now):
             "log_interval=10",
             "log_count=%d" % len(specs),
             "log_current=" + name_of(specs[2][0]),
-            "log_running=1"]
-    for i, sp in enumerate(specs):
-        st, en, ab, sm, c0, c1, tmax, pmw, imax, vmax = sp
+            "log_running=1",
+            "log_plugged=1"]
+    # monitor.sh --logs 是 ls -1t，最新的排最前，假数据也要照这个顺序
+    order = [2, 1, 0]
+    for i, idx in enumerate(order):
+        st, en, ab, sm, c0, c1, tmax, pmw, imax, vmax = specs[idx]
         rows += [
             "log.%d.name=%s" % (i, name_of(st)),
             "log.%d.start=%d" % (i, st),

@@ -648,22 +648,28 @@
 
   function renderLogState(k) {
     var running = (k.log_running || '').trim() === '1';
+    var plugged = (k.log_plugged || '').trim() === '1';
     var iv = num(k.log_interval);
     var cur = (k.log_current || '').trim();
+    var cnt = num(k.log_count) || 0;
 
     var chip = $('logStateChip');
-    chip.textContent = running ? '记录中' : '未记录';
+    chip.textContent = running ? '记录中' : '未在记录';
     chip.className = 'chip small ' + (running ? 'ok' : 'warn');
 
-    setText('logInterval', iv !== null ? String(iv) : '30');
+    setText('logInterval', iv !== null ? String(iv) : '10');
     $('logStartBox').classList.toggle('hidden', running);
 
+    /* 四句话覆盖全部状态，让用户不用猜：
+         进程没跑 / 在跑且在记 / 在跑且插着电但还没采到点 / 在跑但没插电 */
     if (!running) {
-      setText('logHintText', '后台记录进程没有在跑，插拔充电器不会被记下来。');
+      setText('logHintText', '后台记录进程没有在跑，插拔充电器不会被记下来。点下面的按钮启动。');
     } else if (cur) {
       setText('logHintText', '正在记录这次充电（' + cur + '），拔出充电器后结束。');
+    } else if (plugged) {
+      setText('logHintText', '充电器已插上，正在等第一个采样点（最多 ' + (iv !== null ? iv : 10) + ' 秒）。');
     } else {
-      setText('logHintText', '等待插上充电器…');
+      setText('logHintText', '后台在跑，现在没插充电器 —— 插上就会自动开始记。已有 ' + cnt + ' 次记录。');
     }
   }
 
@@ -712,7 +718,8 @@
 
         var dur = document.createElement('div');
         dur.className = 'lt-dur';
-        dur.textContent = durationText(s.start, s.end);
+        /* 还没 #end 的就是正在记的那一次，别显示成「—」 */
+        dur.textContent = s.end ? durationText(s.start, s.end) : '进行中';
 
         li.appendChild(main);
         li.appendChild(dur);
@@ -734,6 +741,11 @@
        变了再整块重画（列表最多 40 行，重建代价可以接受，但没必要每 5 秒来一次）。 */
     return exec('sh ' + moduleDir() + '/monitor.sh --logs', 30000)
       .then(function (res) {
+        /* 采集脚本本身失败时必须说出来。以前不看 errno，stdout 空着就当成
+           「0 个会话」，页面于是永远停在「读取中…」，谁也看不出是坏了。 */
+        if (res.errno !== 0 && !res.stdout) {
+          throw new Error((res.stderr || '').trim() || ('monitor.sh 返回 ' + res.errno));
+        }
         var k = parseKV(res.stdout || '');
         var n = num(k['log.list_count']) || 0;
 
@@ -757,24 +769,32 @@
 
         renderLogState(k);
 
+        /* 指纹比对：静默刷新时没变就一个节点都不动。但非静默（刚把列表清成
+           「读取中…」）必须重画，否则会把自己刚写的占位留在屏幕上；
+           「从来没画过」也不能算没变 —— 空列表的指纹也是空串。 */
         var sig = listSig(next);
-        if (sig === logSig && ul && ul.children.length) return;
+        if (silent && logsDrawn && sig === logSig) return;
         logSig = sig;
+        logsDrawn = true;
         logList = next;
         renderLogList();
       })
       .catch(function (err) {
-        if (silent) return;
+        /* 静默刷新失败也不要把界面留在「读取中…」：只有真的已经画好过一次
+           列表，才允许安静地失败（下一轮自己会恢复）。 */
+        if (silent && logsDrawn) return;
         if (!ul) return;
         ul.innerHTML = '';
         var li = document.createElement('li');
         li.className = 'empty';
         li.textContent = '读取失败：' + (err && err.message ? err.message : err);
         ul.appendChild(li);
+        logsDrawn = true;
       });
   }
 
   var logSig = '';
+  var logsDrawn = false;
 
   function listSig(list) {
     var a = [];

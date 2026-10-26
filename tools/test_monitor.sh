@@ -174,6 +174,16 @@ expect "$OUT" log_interval 10
 expect "$OUT" log_count 0
 expect "$OUT" log_running 0
 expect "$OUT" log_current ""
+# 页面靠这一项区分「在等充电器」和「插上了还没采到点」
+expect "$OUT" log_plugged 1
+
+# 拔掉所有供电源、电池也不是 Charging/Full 时，必须报 0
+w "$PS/usb/online" 0
+w "$PS/battery/status" "Discharging"
+SYSFS_ROOT="$SYS" MODDIR="$MOD" sh "$MODDIR_SRC/monitor.sh" > "$SB/out_np.txt" 2>&1
+expect "$SB/out_np.txt" log_plugged 0
+w "$PS/usb/online" 1
+w "$PS/battery/status" "Charging"
 
 echo "== --full：分区头部比对（判断是否需重新应用） =="
 PRT="$SB/fake_part.img"

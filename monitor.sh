@@ -13,7 +13,8 @@
 # 用法：
 #   monitor.sh            实时采集（页面轮询用）
 #   monitor.sh --full     实时采集 + 回读分区头部哈希（判断是否需要重新应用）
-#   monitor.sh --logs     只列充电日志会话（不采集 sysfs，切标签页用）
+#   monitor.sh --logs     只列充电日志会话（切标签页用；只读几个 power_supply
+#                         节点判断充电器插没插，不做完整采集）
 #   monitor.sh --log NAME 只导出某个会话的采样点
 #
 # 可通过环境变量覆盖路径（PC 上用假目录自测）：
@@ -85,6 +86,27 @@ log_state() {
 		fi
 	fi
 	emit log_running "$_running"
+
+	# 充电器插没插。页面靠这个区分「在等充电器」和「插上了还没采到点」，
+	# 否则用户只能看到一个「记录中」，根本判断不出到底记没记。
+	# 判据和 chargelog.sh 的 plugged_in() 保持一致：任一供电源 online=1，
+	# 都识别不到时退回看电池状态。
+	_pl=0
+	for _s in usb ac wireless dc pc_port; do
+		rv "$SYS/class/power_supply/$_s/online"
+		[ "$_RV" = "1" ] && _pl=1
+	done
+	if [ "$_pl" = "0" ]; then
+		for _bd in battery Battery bms; do
+			[ -d "$SYS/class/power_supply/$_bd" ] || continue
+			rv "$SYS/class/power_supply/$_bd/status"
+			case "$_RV" in
+				Charging|Full) _pl=1 ;;
+			esac
+			break
+		done
+	fi
+	emit log_plugged "$_pl"
 }
 
 # ------------------------------------------------------------------ 会话列表 ---
