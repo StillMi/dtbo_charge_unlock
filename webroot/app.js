@@ -220,6 +220,12 @@
     d.backupCount = num(k.backup_count);
     d.dryRun    = (k.cfg_dry_run || '').trim();
 
+    /* Scene 温控档位。monitor.sh 只「读一眼」，读到什么就是什么；
+       读不到就是空字符串，不猜。 */
+    d.scene = (k.scene_thermal || '').trim();
+    d.sceneFile = (k.scene_file || '').trim();
+    d.thermalEngine = num(k.thermal_engine) === 1;
+
     d.ffcLow  = num(k.cfg_ffc_low);
     d.ffcHigh = num(k.cfg_ffc_high);
     d.tier    = (k.cfg_tier || '').trim();
@@ -331,6 +337,8 @@
     renderWindow(d);
     renderThermal(k);
     renderModule(d);
+    renderScene(d);
+    renderRestore(d);
 
     /* ---- 原始数据 ---- */
     /* 这段文本很长，每 2 秒重写一次会很卡；折叠状态下干脆不生成。 */
@@ -495,6 +503,113 @@
     }
 
     setText('kDryRun', d.dryRun === '1' ? '开启（不写分区）' : '关闭');
+  }
+
+  /* ---- 系统温控（Scene 档位）----
+     模块只改 dtbo 里充电 IC 自己的温控表，系统层的温控（MIUI 的
+     thermal-engine / mi_thermald）优先级更高。没把 Scene 的温控改成
+     「丧心病狂」的话，很可能刷完一点都提不上去 —— 但这是「可能」，
+     不是结论：Scene 的档位只是它自己的设置，用户也可能用别的方式改过。
+     所以这里只把读到的原样摆出来，不替用户下判断。 */
+  var SCENE_LABEL = {
+    'default': '系统默认',
+    'cool': '清爽酷凉',
+    'pro': '深度定制',
+    'performance': '提高阈值',
+    'extreme': '极致性能',
+    'danger': '丧心病狂'
+  };
+
+  function renderScene(d) {
+    var chip = $('sceneChip');
+    var top = $('sceneBanner');
+    if (!chip) return;
+
+    var key = (d.scene || '').toLowerCase();
+    var label = SCENE_LABEL[key] || '';
+    var txt = key ? (label ? label + '（' + key + '）' : key) : '—';
+
+    if (!key) {
+      chip.textContent = '未检测到';
+      chip.className = 'chip small warn';
+      setText('kScene', '—');
+      $('kScene').className = '';
+      setText('sceneHint',
+        '没找到 Scene 的温控档位文件。要是确实装了 Scene 并选了「丧心病狂」，'
+        + '那可能是版本不同、文件在别处，或者温控是用别的方式改的 —— '
+        + '直接看充电功率有没有上去更靠谱。');
+      setText('kThermalEngine', d.thermalEngine ? '在运行' : '未找到');
+      $('kThermalEngine').className = d.thermalEngine ? 'warn' : '';
+      if (top) top.className = 'banner hidden';
+      return;
+    }
+
+    setText('kScene', txt);
+    $('kScene').className = (key === 'danger') ? 'ok' : 'warn';
+    setText('kThermalEngine', d.thermalEngine ? '在运行' : '未找到');
+    $('kThermalEngine').className = '';
+
+    if (key === 'danger') {
+      chip.textContent = '已放开';
+      chip.className = 'chip small ok';
+      setText('sceneHint',
+        'Scene 的温控档位是「丧心病狂」，系统层温控已经放开，'
+        + '模块改的充电温控表能真正起作用。');
+      if (top) top.className = 'banner hidden';
+    } else {
+      chip.textContent = '可能还在限流';
+      chip.className = 'chip small warn';
+      setText('sceneHint',
+        'Scene 现在的温控档位是「' + (label || key) + '」，不是「丧心病狂」。'
+        + '系统层温控优先级比 dtbo 高，这种情况下刷了模块也可能完全看不到提速。'
+        + '建议先去 Scene 把温控改成「丧心病狂」，再回来确认。');
+      if (top) {
+        top.className = 'banner warn';
+        top.innerHTML = '系统温控没有放开（Scene 当前档位：<strong>'
+          + (label || key) + '</strong>）。模块只改充电 IC 自己的温控表，'
+          + '系统层的限流优先级更高 —— <strong>不把 Scene 温控改成「丧心病狂」，'
+          + '很可能一点都提不上去</strong>。';
+      }
+    }
+  }
+
+  /* ---- 恢复原厂 ---- */
+  function renderRestore(d) {
+    var chip = $('restoreChip');
+    if (!chip) return;
+
+    var btn = $('btnRestore');
+    var has = !!d.backupFile;
+
+    if (has) {
+      setText('kRestoreFile', d.backupFile.split('/').pop()
+        + (d.backupSize !== null ? ' ' + (d.backupSize / 1024 / 1024).toFixed(1) + ' MB' : ''));
+      chip.textContent = '可恢复';
+      chip.className = 'chip small ok';
+      if (btn) btn.disabled = false;
+    } else {
+      setText('kRestoreFile', '—');
+      chip.textContent = '没有备份';
+      chip.className = 'chip small warn';
+      if (btn) btn.disabled = true;
+    }
+
+    var stale = (d.headMatch === false);
+    var hint = $('restoreHint');
+    if (!hint) return;
+    var base = '把刷入前备份的原厂 <code>dtbo</code> 写回当前槽位，之后充电就回到官方限制。';
+    if (!has) {
+      hint.innerHTML = base
+        + '<br><strong>现在没有可用的原厂备份</strong>，没法用这个按钮回滚。'
+        + '要真正回到原厂，请用 fastboot 刷入当前系统版本的官方 <code>dtbo</code>。';
+    } else if (stale) {
+      hint.innerHTML = base
+        + '<br><strong>注意：当前分区已经不是本模块写入的那份了</strong>'
+        + '（系统大概更新过），这份备份可能和当前系统对不上。'
+        + '更稳的做法是用 fastboot 刷入当前系统版本的官方 <code>dtbo</code>。';
+    } else {
+      hint.innerHTML = base + '<strong>这一步会真的改分区。</strong>';
+    }
   }
 
   /* ------------------------------------------------------------ 曲线 --- */
@@ -1065,6 +1180,7 @@
   /* --------------------------------------------------------- 运行修改 --- */
 
   var applying = false;
+  var restoring = false;
 
   function applyOut(text) {
     var el = $('applyOut');
@@ -1093,7 +1209,7 @@
   }
 
   function doApply() {
-    if (applying) return;
+    if (applying || restoring) return;
     applying = true;
 
     var btn = $('btnApply');
@@ -1146,10 +1262,76 @@
     });
   }
 
+  /* --------------------------------------------------------- 恢复原厂 --- */
+
+  function restoreOut(text) {
+    var el = $('restoreOut');
+    if (!el) return;
+    el.classList.remove('hidden');
+    el.textContent = text;
+  }
+
+  function doRestore() {
+    if (restoring || applying) return;
+    restoring = true;
+
+    var btn = $('btnRestore');
+    btn.disabled = true;
+    btn.textContent = '正在写回…';
+    stopTimer();
+    restoreOut('开始写回原厂镜像，期间请不要退出页面…');
+
+    exec('sh ' + moduleDir() + '/restore.sh -y', 240000)
+      .then(function (res) {
+        var out = (res.stdout || '');
+        if (res.stderr) out += (out ? '\n' : '') + res.stderr;
+        out += '\n--- 退出码: ' + res.errno + ' ---';
+        restoreOut(out);
+        if (res.errno === 0) {
+          banner('已写回原厂 dtbo。<strong>重启后</strong>充电就回到官方限制了。', 'ok');
+        } else {
+          banner('写回未成功（退出码 ' + res.errno + '），详见下方输出。分区可能未被修改。', 'err');
+        }
+      })
+      .catch(function (err) {
+        var msg = err && err.message ? err.message : err;
+        restoreOut('执行失败：' + msg);
+        banner('写回失败：' + msg, 'err');
+      })
+      .then(function () {
+        restoring = false;
+        btn.disabled = false;
+        btn.textContent = '恢复原厂 dtbo';
+        return refresh(true);
+      })
+      .then(function () { if (autoOn) startTimer(); });
+  }
+
+  function bootRestore() {
+    var btn = $('btnRestore');
+    if (!btn) return;
+    btn.addEventListener('click', function () {
+      var d = last;
+      var slot = d && d.part ? d.part : '当前槽位';
+      var warn = '';
+      if (d && d.headMatch === false) {
+        warn = '<br><br><strong>当前分区已经不是本模块写入的那份了（系统大概更新过），'
+             + '这份备份可能和当前系统对不上。真要不放心就用 fastboot 刷官方 dtbo。</strong>';
+      }
+      askConfirm(
+        '将会把<b>备份的原厂镜像写回</b> <code>' + slot + '</code>，'
+        + '之后充电限制就回到官方状态。'
+        + '<br><br>写完会回读校验。<strong>这一步会真的改分区。</strong>'
+        + '<br>写回后需要<b>重启</b>才生效。' + warn
+      ).then(function (ok) {
+        if (ok) doRestore();
+      });
+    });
+  }
+
   function boot() {
     setText('devModel', '读取中…');
     bootLogs();
-
     if (!hasKsu()) {
       banner('这个页面需要从 <strong>KernelSU 管理器</strong>里打开才能读取系统数据。'
            + '直接当普通网页打开时，KernelSU 的 <code>ksu</code> 接口不可用。', 'warn');
@@ -1172,6 +1354,7 @@
     refresh(true).then(startTimer);
     $('btnRefresh').addEventListener('click', function () { refresh(true); });
     bootApply();
+    bootRestore();
 
     var toggle = $('autoToggle');
     toggle.addEventListener('change', function () {

@@ -28,6 +28,7 @@
 </header>
 
 <div id="banner" class="banner hidden"></div>
+<div id="sceneBanner" class="banner warn hidden"></div>
 
 <nav class="tabs" id="tabs">
   <button class="tab on" type="button" data-tab="live">实时</button>
@@ -154,6 +155,41 @@
         <strong>「是否生效」显示「否」就是该跑一次了。</strong>
       </p>
       <pre id="applyOut" class="raw hidden"></pre>
+    </div>
+  </section>
+
+  <!-- ---------------------------------------------------------- 温控检查 --- -->
+  <section class="card" id="thermalCard">
+    <div class="card-head">
+      <h2>系统温控</h2>
+      <span class="chip small" id="sceneChip">—</span>
+    </div>
+    <dl class="kvlist">
+      <div><dt>Scene 档位</dt><dd id="kScene">—</dd></div>
+      <div><dt>温控引擎</dt><dd id="kThermalEngine">—</dd></div>
+    </dl>
+    <p class="fine" id="sceneHint">
+      模块只改 dtbo 里充电 IC 自己的温控。<strong>系统层的温控优先级更高</strong>，
+      它要是还在限流，刷了也可能一点都提不上去。
+    </p>
+  </section>
+
+  <!-- ---------------------------------------------------------- 恢复原厂 --- -->
+  <section class="card" id="restoreCard">
+    <div class="card-head">
+      <h2>恢复原厂</h2>
+      <span class="chip small warn" id="restoreChip">—</span>
+    </div>
+    <dl class="kvlist">
+      <div><dt>备份镜像</dt><dd id="kRestoreFile" class="mono">—</dd></div>
+    </dl>
+    <div class="apply-box">
+      <button id="btnRestore" class="danger" type="button">恢复原厂 dtbo</button>
+      <p class="fine" id="restoreHint">
+        把刷入前备份的原厂 <code>dtbo</code> 写回当前槽位，之后充电就回到官方限制。
+        写之前会先确认一次。<strong>这一步会真的改分区。</strong>
+      </p>
+      <pre id="restoreOut" class="raw hidden"></pre>
     </div>
   </section>
 

@@ -118,7 +118,7 @@
 ## 二、安装与使用
 
 1. **先按上面那节把 Scene 温控改成「丧心病狂」**，否则装了也不一定有效。
-2. 用 KernelSU（或 Magisk）安装 `dtbo_charge_unlock-v1.12.0.zip`。
+2. 用 KernelSU（或 Magisk）安装 `dtbo_charge_unlock-v2.0.0.zip`。
    **安装过程中就会刷写**，安装界面能看到完整过程与结果。
    从 v1.9.0 及更早版本升级上来时，安装脚本会自动清掉旧版的
    `post-fs-data.sh` 和 `pending` / `confirmed` / `halted` 状态文件
@@ -206,6 +206,36 @@ WebUI 会帮你判断：状态显示 **需重新应用**、「是否生效」显
 温度窗口那条只是「目标值」，实际充电功率还受充电器、线材、SoC 温度等影响，
 页面不会把这些混为一谈。
 
+### 系统温控检查（v2.0.0 新增）
+
+模块只改 `dtbo` 里**充电 IC 自己的**温控表。系统层还有一层温控
+（MIUI 的 `thermal-engine` / `mi_thermald`，一般用 Scene 之类工具改），
+它的优先级比 `dtbo` 高 —— **系统层没放开，刷了模块也可能一点都提不上去**。
+
+所以页面多了一张「系统温控」卡片，读 Scene 的档位（就是它自己模块目录里的
+`system/vendor/etc/thermal.current.ini`，旧版 Scene 是 `thermal-engine.current.ini`）：
+
+| 读到的档位 | 页面显示 | 顶部提示 |
+| --- | --- | --- |
+| `danger`（丧心病狂） | 已放开 | 不提示 |
+| 其它（`default`/`cool`/`pro`/`performance`/`extreme`） | 可能还在限流 | **醒目告警**，建议先去 Scene 改成「丧心病狂」 |
+| 读不到（没装 Scene / 文件在别处） | 未检测到 | 不提示，只说明没找到 |
+
+这里**只读一眼、不下结论**：Scene 的档位是它自己的设置，用户也可能用别的方式
+改过温控，读不到不代表一定被限流。卡片同时显示系统温控引擎的可执行文件在不在，
+当作旁证。
+
+### 恢复原厂（v2.0.0 新增）
+
+页面底部有「恢复原厂」卡片，把命令行里的 `restore.sh` 搬了上来：
+
+* 显示备份文件名与大小，以及有没有可用的备份
+* 点 **「恢复原厂 dtbo」** → 弹确认框 → 确认后执行 `restore.sh -y`，
+  把刷入前备份的原厂镜像写回当前槽位，过程和退出码回显在页面上
+* **没有备份时按钮是禁用的**，会提示改用 fastboot 刷官方 `dtbo`
+* 当前分区已经不是本模块写入的那份时（系统更新过），会额外警告
+  「这份备份可能和当前系统对不上」
+
 ### 充电日志（WebUI 的第二个标签页）
 
 页面顶部有 **「实时」/「充电日志」** 两个标签页。切到「充电日志」可以看到
@@ -275,13 +305,15 @@ WebUI 会帮你判断：状态显示 **需重新应用**、「是否生效」显
 | 容得下系统更新 | 厂商在 `dtbo` 里改别的部分（新增节点、条目数变化、把充电节点拆到不同条目）都能正常跑通；不含充电节点的条目原样保留、一个字节不动 |
 | 安装失败不阻断 | 安装阶段刷写失败（例如分区只读）时模块照常装好，可手动再跑一次；想直接中止可设 `ABORT_ON_INSTALL_FAIL=1` |
 | 生效自检 | 记下刷入镜像开头 1MB 的哈希，WebUI 每次打开都回读当前分区比对，不一致就提示「需重新应用」 |
+| 温控兜底提示 | WebUI 读 Scene 的温控档位，不是「丧心病狂」时在页面顶部醒目告警，免得用户以为模块没用（只读，不改任何东西） |
 
 > **没有开机验证、也没有自动回滚。** 早期版本有一套「刷完等开机确认，连续 3 次
 > 起不来就自动写回备份」的机制，现在已经删掉了 —— 它会在开机阶段写分区，和
 > 「只在手动触发时才改」这条原则冲突。现在判断模块有没有生效只有一条：
 > WebUI 里「是否生效」显示「是」就是生效了，显示「否」就点一次「运行修改」。
 >
-> 真要恢复原厂，用下面的 `restore.sh` 手工回滚，它是显式操作，不会自己触发。
+> 真要恢复原厂，用 WebUI 的「恢复原厂 dtbo」按钮，或者下面的 `restore.sh`
+> 手工回滚，它是显式操作，不会自己触发。
 
 > **不检查 bootloader 锁定状态。** KernelSU 会伪造 `ro.boot.flash.locked` /
 > `ro.boot.verifiedbootstate`（例如报成 `green`），按它们判断只会把正常设备
@@ -335,7 +367,7 @@ dtbo_charge_unlock/
 ├── service.sh            开机后期：只拉起充电日志（不刷写、不做开机确认）
 ├── chargelog.sh          充电日志后台进程（插入→拔出，一段会话一个文本）
 ├── action.sh             KernelSU「操作」按钮 / 手动执行
-├── restore.sh            手工回滚
+├── restore.sh            手工回滚（WebUI 上也有按钮）
 ├── dump.sh               只读导出：拆出每个 DTB 存成 .dtb/.dts，并生成参数汇总
 ├── monitor.sh            只读采集充电状态 / 列出与导出充电日志（WebUI 用）
 ├── uninstall.sh          卸载时把备份和充电日志留存到 /sdcard/Download（不改分区）
@@ -386,6 +418,9 @@ dtbo_charge_unlock/
 * **本模块管不到系统层温控。** 它只改 `dtbo` 里充电 IC 自己的温度限制；
   Qualcomm thermal HAL / 厂商 thermal-engine 的限流优先级更高，
   不把 Scene 的温控等级改成「丧心病狂」，很可能看不到任何提速。
+  WebUI 会读 Scene 的档位来提醒，但**那只是 Scene 自己的设置**：
+  读不到不代表一定被限流，读到了也不代表系统温控真的按它执行了 ——
+  最终还是以实际充电功率为准。
 * 档位只能在**安装时**选（或改 `FORCE_TIER` 后重跑）；它改的是分区里的
   `dtbo`，不是运行时可调参数。两个档位都只是把全速段的边界往后推，
   上限仍然是**充电 IC 自己的硬件保护**，那部分改不掉也不该改。
@@ -449,7 +484,7 @@ python tools/gen_ref.py  <参考.dts> ref
 python tools/gen_sed.py  ref/patch.list ref
 
 # 4) 打包（内置编码检查，有 CRLF / BOM 会直接拒绝）
-python tools/package.py  . dist/dtbo_charge_unlock-v1.12.0.zip
+python tools/package.py  . dist/dtbo_charge_unlock-v2.0.0.zip
 ```
 
 WebUI 的页面逻辑也可以在 PC 上验证，不需要设备。做法是造一个假的 `ksu`
@@ -468,7 +503,8 @@ python tools/mkwebui_harness.py . build/webui build/monitor_sample.txt
          --dump-dom "file:///<绝对路径>/build/webui/index.html" > build/dom.html
 
 # 7) 状态分支：充电中 / 放电 / 已充满 / 过热越界 / 低于下限 / 残留 halted /
-#    OTA 后需重新应用 / 无电池节点（共 9 个场景）
+#    OTA 后需重新应用 / 无电池节点 / 温控没放开 / 没装 Scene / 没有原厂备份
+#    （共 12 个场景）
 python tools/webui_scenarios.py . build/wsc "<浏览器路径>" build/monitor_sample.txt
 ```
 
@@ -476,6 +512,8 @@ python tools/webui_scenarios.py . build/wsc "<浏览器路径>" build/monitor_sa
 电量环是否绘制、四条曲线是否有像素、温度标记是否越界变红、
 两个标签页能不能切换、充电日志列表/会话详情/四张曲线是否都画出来了、
 **空日志列表会不会卡在「读取中…」**、未结束的会话显示的是「进行中」、
+温控卡片有没有认出「丧心病狂」、档位正确时顶部不误报、
+「恢复原厂」按钮点下去是不是先弹确认框再调 `restore.sh`、
 温度列表有没有被反复重建、折叠的原始数据有没有被反复重写、
 以及有没有横向溢出。这样 UI 改动不必靠肉眼确认。
 
@@ -493,7 +531,7 @@ python tools/webui_scenarios.py . build/wsc "<浏览器路径>" build/monitor_sa
 | `test_manual.sh` | 「只手动触发」约定：原厂分区 + 无状态时开机脚本不许动手；手动 `action.sh` 才刷；刷完开机仍不许动；重复运行跳过；`last_head` 与分区开头一致 |
 | `test_edge.sh` | 无状态时开机不碰分区、旧版本残留的 pending 不会让开机脚本动手、`last_head` 判据正反两向、校验器正反两向、`FORCE_SLOT`、单分区识别 |
 | `test_module.sh` | DTBO 表（3 条目 / 单条目 / 混合板型 / **大端+紧凑布局**）、裸 DTB 单段与双段、已刷过跳过、只换档位会重刷、演练模式、A/B 与单分区槽位 |
-| `test_monitor.sh` | WebUI 采集脚本：电池/电源/温度区字段、充电器温度 `chg_temp_raw`、不再输出 pending/halted、残留旧状态文件不影响输出、无电池节点时降级、`--full` 时的分区头部比对、充电日志的 `log_*` 字段（含 `log_plugged` 插拔判定正反两向） |
+| `test_monitor.sh` | WebUI 采集脚本：电池/电源/温度区字段、充电器温度 `chg_temp_raw`、不再输出 pending/halted、残留旧状态文件不影响输出、无电池节点时降级、`--full` 时的分区头部比对、充电日志的 `log_*` 字段（含 `log_plugged` 插拔判定正反两向）、Scene 温控档位（新版/旧版文件名、空白清理、优先级、非 Scene 模块不误读） |
 | `test_chargelog.sh` | 充电日志后台进程：没插电不建会话、插电建会话、**11 个字段**（含功率/充电器电压/限流/充电器温度）、继续采样、拔出收尾、`status` 兜底、异常中断补 `#aborted`、重复启动、`CHARGELOG=0` 关闭、`monitor.sh --logs/--log` 输出（含功率/电压/电流峰值）、路径穿越被拒、超出 `CHARGELOG_MAX` 淘汰最旧 |
 | `test_key.sh` | 音量键解析（按下/抬起/无关事件/多行）与 `tier_pick` 各分支：音量下→48、音量上→56、不按、`FORCE_TIER` 合法/乱填、`TIER_PROMPT=0` |
 | `test_tier.sh` | 逐个档位跑完整安装，再把刷好的分区拆出来反编译，确认 `ffc_temp_high = <0x30>/<0x38>` 与 JEITA 高温边界真的是 48/56，**并确认另一个档位的取值没有残留**（防止只改了一半） |

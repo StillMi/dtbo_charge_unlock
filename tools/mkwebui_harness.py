@@ -139,6 +139,32 @@ font:11px/1.55 monospace;white-space:pre-wrap">check 未运行</pre>
     chk('分区一致已判定', txt('kApplied') !== '—', txt('kApplied'));
     chk('备份已填', txt('kBackup') !== '—', txt('kBackup'));
 
+    /* ---- 系统温控卡片（样本里 Scene 是 danger = 丧心病狂）---- */
+    chk('温控档位已填', txt('kScene') !== '—', txt('kScene'));
+    chk('温控档位认得出丧心病狂', /丧心病狂/.test(txt('kScene')), txt('kScene'));
+    chk('温控状态标签', txt('sceneChip') === '已放开', txt('sceneChip'));
+    chk('温控引擎已填', txt('kThermalEngine') !== '—', txt('kThermalEngine'));
+    chk('温控说明已填', txt('sceneHint').length > 6, txt('sceneHint').slice(0, 30));
+    chk('档位正确时顶部不告警',
+        document.getElementById('sceneBanner').classList.contains('hidden'),
+        document.getElementById('sceneBanner').className);
+
+    /* ---- 恢复原厂卡片 ---- */
+    var rb = document.getElementById('btnRestore');
+    chk('恢复原厂按钮可见',
+        rb && txt('btnRestore') === '恢复原厂 dtbo'
+           && rb.getBoundingClientRect().height > 20,
+        rb ? txt('btnRestore') + ' h=' + Math.round(rb.getBoundingClientRect().height) : '缺失');
+    chk('备份文件名已填', txt('kRestoreFile') !== '—', txt('kRestoreFile'));
+    chk('恢复状态标签', txt('restoreChip') === '可恢复', txt('restoreChip'));
+    chk('恢复说明提到会改分区', /改分区/.test(txt('restoreHint')),
+        txt('restoreHint').slice(0, 40));
+    var rs = window.__restore || {};
+    chk('点恢复弹出确认框', rs.opened === true, 'opened=' + rs.opened);
+    chk('确认前不写分区', rs.calledBefore === false, 'calledBefore=' + rs.calledBefore);
+    chk('确认后调用 restore.sh', rs.called === true, (rs.calls || []).join(' | '));
+    chk('恢复按钮已复位', txt('btnRestore') === '恢复原厂 dtbo', txt('btnRestore'));
+
     var ab = document.getElementById('btnApply');
     chk('运行修改按钮可见',
         ab && txt('btnApply') === '运行修改'
@@ -221,7 +247,7 @@ font:11px/1.55 monospace;white-space:pre-wrap">check 未运行</pre>
     document.getElementById('__check').textContent = r.join('\\n');
   }
 
-  setTimeout(run, 14000);
+  setTimeout(run, 19000);
 })();
 </script>
 """
@@ -411,6 +437,39 @@ TABS = """<script>
 """
 
 
+# 「恢复原厂」交互：等标签页那轮跑完，再点按钮 → 弹确认框 → 确认后才 exec restore.sh
+RESTORE = """<script>
+(function () {
+  function go() {
+    var rb = document.getElementById('btnRestore');
+    var modal = document.getElementById('confirm');
+    var rs = { opened: false, called: false, calledBefore: false, calls: [] };
+    window.__restore = rs;
+    if (!rb) { window.__restoreDone = true; return; }
+
+    var n0 = (window.__calls || []).length;
+    rb.click();
+    rs.opened = !modal.classList.contains('hidden');
+    rs.calledBefore = (window.__calls || []).length > n0;
+
+    document.getElementById('confirmYes').click();
+    setTimeout(function () {
+      rs.calls = (window.__calls || []).slice(n0);
+      for (var i = 0; i < rs.calls.length; i++) {
+        if (/restore\\.sh/.test(rs.calls[i])) rs.called = true;
+      }
+      window.__restoreDone = true;
+    }, 1600);
+  }
+  /* 等充电日志那轮（含空列表）彻底跑完再动，避免两个确认框互相踩 */
+  var t = setInterval(function () {
+    if (window.__log && window.__log.done) { clearInterval(t); go(); }
+  }, 120);
+})();
+</script>
+"""
+
+
 def fake_fixtures(now):
     """造两份假数据：monitor.sh --logs 的会话列表、--log 的采样点。"""
     import time as _t
@@ -504,7 +563,7 @@ def main():
 
     html = html.replace('<script src="app.js"></script>',
                         STUB % (json.dumps(base), json.dumps(logs), json.dumps(sess)) +
-                        '<script src="app.js"></script>' + ERRBOX + RAW + APPLY + TABS)
+                        '<script src="app.js"></script>' + ERRBOX + RAW + APPLY + TABS + RESTORE)
 
     with open(index, "w", encoding="utf-8", newline="\n") as fh:
         fh.write(html)

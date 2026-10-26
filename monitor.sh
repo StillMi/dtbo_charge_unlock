@@ -390,6 +390,56 @@ case "$_KV" in
 	*)  emit cfg_tier custom ;;
 esac
 
+# ---------------------------------------------------------------- Scene 温控 ---
+# Scene（vtools）把当前温控档位写在它自己那个模块的
+# system/vendor/etc/thermal.current.ini 里，内容就是一个单词
+# （default / cool / pro / performance / extreme / danger），
+# 旧版 Scene 用的是 thermal-engine.current.ini。
+# 对照表来自 vtools 的 thermal_conf/<平台>/options.txt，例如
+#   danger|丧心病狂(danger)   extreme|极致性能(extreme)   pro|深度定制(pro)
+# 也就是说「丧心病狂」= danger。
+#
+# 这里只做「读一眼」，不判断它到底改没改 thermal 引擎：
+# Scene 的档位是它自己的设置，用户也可能直接用别的工具改过温控，
+# 所以读不到 / 不是 danger 都只当提示，不当结论。
+_scene=""
+_scene_where=""
+# MODULES_ROOT 只为测试留的口子，真机上就是 /data/adb
+_mroot="${MODULES_ROOT:-/data/adb}"
+for _r in "$_mroot/modules_update" "$_mroot/modules"; do
+	[ -d "$_r" ] || continue
+	for _m in "$_r"/*; do
+		[ -d "$_m" ] || continue
+		case "${_m##*/}" in
+			*scene*|*Scene*|*SCENE*|*vtools*)
+				for _f in thermal.current.ini thermal-engine.current.ini; do
+					_p="$_m/system/vendor/etc/$_f"
+					[ -r "$_p" ] || continue
+					IFS= read -r _scene 2>/dev/null < "$_p" || :
+					_scene=${_scene%"$_CR"}
+					_scene=$(printf '%s' "$_scene" | tr -d ' \t')
+					_scene_where="$_p"
+					break
+				done
+				;;
+		esac
+		[ -n "$_scene" ] && break
+	done
+	[ -n "$_scene" ] && break
+done
+emit scene_thermal "$_scene"
+emit scene_file    "$_scene_where"
+
+# 系统温控引擎有没有在跑（MIUI 上叫 thermal-engine / mi_thermald）。
+# 只是给用户一个旁证：即使 Scene 写着 danger，引擎要是没起来也不会有节流，
+# 反过来说引擎在跑、档位又不是 danger，那大概率还在被限流。
+_te=0
+for _p in /system/bin/thermal-engine /vendor/bin/thermal-engine \
+          /system/bin/mi_thermald /vendor/bin/mi_thermald; do
+	[ -x "$_p" ] && _te=1
+done
+emit thermal_engine "$_te"
+
 # ------------------------------------------------------------ 充电日志状态 ---
 log_state
 

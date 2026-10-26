@@ -182,6 +182,47 @@ w "$PS/usb/online" 0
 w "$PS/battery/status" "Discharging"
 SYSFS_ROOT="$SYS" MODDIR="$MOD" sh "$MODDIR_SRC/monitor.sh" > "$SB/out_np.txt" 2>&1
 expect "$SB/out_np.txt" log_plugged 0
+
+echo "== Scene 温控档位 =="
+# 没有 Scene 模块时，档位是空的，但不能报错、也不能瞎猜
+expect "$OUT" scene_thermal ""
+expect "$OUT" scene_file ""
+
+# 造一个假的 Scene 模块目录：新版用 thermal.current.ini
+MR="$SB/modroot"
+SC="$MR/modules/scene_test/system/vendor/etc"
+mkdir -p "$SC"
+printf 'danger\n' > "$SC/thermal.current.ini"
+MODULES_ROOT="$MR" SYSFS_ROOT="$SYS" MODDIR="$MOD" sh "$MODDIR_SRC/monitor.sh" > "$SB/out_sc.txt" 2>&1
+expect "$SB/out_sc.txt" scene_thermal danger
+expect "$SB/out_sc.txt" scene_file "$SC/thermal.current.ini"
+
+# 档位文件里有空白/回车也要清干净
+printf '  pro \r\n' > "$SC/thermal.current.ini"
+MODULES_ROOT="$MR" SYSFS_ROOT="$SYS" MODDIR="$MOD" sh "$MODDIR_SRC/monitor.sh" > "$SB/out_sc2.txt" 2>&1
+expect "$SB/out_sc2.txt" scene_thermal pro
+
+# 旧版 Scene 用的是 thermal-engine.current.ini，也得认
+rm -f "$SC/thermal.current.ini"
+printf 'extreme\n' > "$SC/thermal-engine.current.ini"
+MODULES_ROOT="$MR" SYSFS_ROOT="$SYS" MODDIR="$MOD" sh "$MODDIR_SRC/monitor.sh" > "$SB/out_sc3.txt" 2>&1
+expect "$SB/out_sc3.txt" scene_thermal extreme
+
+# 两个文件都在时，新的 thermal.current.ini 优先
+printf 'cool\n' > "$SC/thermal.current.ini"
+MODULES_ROOT="$MR" SYSFS_ROOT="$SYS" MODDIR="$MOD" sh "$MODDIR_SRC/monitor.sh" > "$SB/out_sc4.txt" 2>&1
+expect "$SB/out_sc4.txt" scene_thermal cool
+
+# 目录名不含 scene/vtools 的模块不该被误读
+mkdir -p "$MR/modules/other_mod/system/vendor/etc"
+printf 'danger\n' > "$MR/modules/other_mod/system/vendor/etc/thermal.current.ini"
+rm -rf "$MR/modules/scene_test"
+MODULES_ROOT="$MR" SYSFS_ROOT="$SYS" MODDIR="$MOD" sh "$MODDIR_SRC/monitor.sh" > "$SB/out_sc5.txt" 2>&1
+expect "$SB/out_sc5.txt" scene_thermal ""
+
+# 系统温控引擎：PC 上没有这些可执行文件，应当是 0
+expect "$OUT" thermal_engine 0
+rm -rf "$MR"
 w "$PS/usb/online" 1
 w "$PS/battery/status" "Charging"
 

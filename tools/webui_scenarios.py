@@ -70,6 +70,17 @@ font:11px/1.55 monospace;white-space:pre-wrap">report 未运行</pre>
     r.push('moduleClass=' + (mc ? mc.className : ''));
     r.push('applied=' + txt('kApplied'));
     r.push('applyBtn=' + txt('btnApply'));
+    r.push('sceneChip=' + txt('sceneChip'));
+    r.push('sceneText=' + txt('kScene'));
+    r.push('sceneHint=' + txt('sceneHint'));
+    var sb = document.getElementById('sceneBanner');
+    r.push('sceneBanner=' + (sb && !sb.classList.contains('hidden') ? 'shown' : 'hidden'));
+    r.push('sceneBannerText=' + (sb ? (sb.textContent || '').trim() : ''));
+    r.push('restoreChip=' + txt('restoreChip'));
+    r.push('restoreFile=' + txt('kRestoreFile'));
+    r.push('restoreHint=' + txt('restoreHint'));
+    var rb = document.getElementById('btnRestore');
+    r.push('restoreDisabled=' + (rb ? String(!!rb.disabled) : 'missing'));
     r.push('thermal=' + document.querySelectorAll('#thermalList li').length);
     document.getElementById('__check').textContent = r.join('\\n');
   }, 11000);
@@ -151,6 +162,28 @@ def sc_reapply(t):
     return t
 
 
+def sc_scene_pro(t):
+    # Scene 温控没改成「丧心病狂」：页面顶部要出醒目提示，别让用户以为模块没用
+    t = setkv(t, "scene_thermal", "pro")
+    t = setkv(t, "thermal_engine", "1")
+    return t
+
+
+def sc_scene_none(t):
+    # 没装 Scene（或者读不到档位文件）：不能瞎猜，只能说没检测到
+    t = setkv(t, "scene_thermal", "")
+    t = setkv(t, "scene_file", "")
+    return t
+
+
+def sc_no_backup(t):
+    # 没有原厂备份时，「恢复原厂」按钮必须禁用，并说清该怎么办
+    t = drop_prefix(t, "backup_file=")
+    t = drop_prefix(t, "backup_size=")
+    t = drop_prefix(t, "backup_time=")
+    return t
+
+
 SCENARIOS = [
     ("充电中", sc_charging, {
         "errors": "0", "banner": "hidden",
@@ -196,6 +229,27 @@ SCENARIOS = [
     ("无电池节点", sc_nobatt, {
         "errors": "0", "banner": "shown", "status": "—",
         "markerDisplay": "none",
+    }),
+    ("温控没放开（Scene=pro）", sc_scene_pro, {
+        "errors": "0",
+        "sceneChip": "可能还在限流",
+        "sceneText_has": "深度定制",
+        "sceneBanner": "shown",
+        "sceneBannerText_has": "丧心病狂",
+    }),
+    ("没装 Scene", sc_scene_none, {
+        "errors": "0",
+        "sceneChip": "未检测到",
+        "sceneText": "—",
+        "sceneBanner": "hidden",
+        "sceneHint_has": "没找到",
+    }),
+    ("没有原厂备份", sc_no_backup, {
+        "errors": "0",
+        "restoreChip": "没有备份",
+        "restoreDisabled": "true",
+        "restoreFile": "—",
+        "restoreHint_has": "没有可用的原厂备份",
     }),
 ]
 
