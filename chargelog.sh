@@ -35,6 +35,7 @@
 # ============================================================================
 
 SYS="${SYSFS_ROOT:-/sys}"
+PROC="${PROC_ROOT:-/proc}"
 MODDIR="${MODDIR:-/data/adb/modules/dtbo_charge_unlock}"
 
 # 被 copy 到别处执行时 $0 可能不是模块目录，优先用自身位置
@@ -95,6 +96,38 @@ ENABLED="$_KV"
 
 PIDF="$LOGDIR/.pid"
 CURF="$LOGDIR/.current"
+BEATF="$LOGDIR/.beat"
+
+# .pid 里的号码到底是不是我们自己的采集进程。
+# 光 kill -0 不够：进程被 SIGKILL 或者掉电杀掉时 trap 来不及跑，.pid 会留在原地，
+# 而 PID 会被系统复用 —— 那个号码可能已经属于别的进程，kill -0 照样成功。
+# 于是 start 直接 exit 0（永远不再启动新进程）、页面一直显示「记录中」，
+# 实际上一个采样点都没写。所以再核对一遍 /proc/<pid>/cmdline。
+alive() {
+	[ -n "$1" ] || return 1
+	kill -0 "$1" 2>/dev/null || return 1
+	[ -r "$PROC/$1/cmdline" ] || return 0
+	# 没有 grep 就只看 kill -0，宁可少起一次也别起两个进程
+	command -v grep >/dev/null 2>&1 || return 0
+	grep -q 'chargelog' "$PROC/$1/cmdline" 2>/dev/null && return 0
+	return 1
+}
+
+# 心跳多久之前写的。读不到（老版本没有 .beat）返回 1，把 $_BA 留成 -1。
+beat_age() {
+	_BA=-1
+	rv "$BEATF"
+	case "$_RV" in
+		''|*[!0-9]*) return 1 ;;
+	esac
+	_n=$(date +%s 2>/dev/null)
+	case "$_n" in
+		''|*[!0-9]*) return 1 ;;
+	esac
+	_BA=$((_n - _RV))
+	[ "$_BA" -ge 0 ] || _BA=0
+	return 0
+}
 
 # --------------------------------------------------------------- 电池节点 ---
 
@@ -245,7 +278,18 @@ start)
 
 	if [ -f "$PIDF" ]; then
 		_p=$(cat "$PIDF" 2>/dev/null)
-		[ -n "$_p" ] && kill -0 "$_p" 2>/dev/null && exit 0
+		if alive "$_p"; then
+			# 确认是自己的采集进程之后，再看心跳：新鲜就别再起一个；
+			# 过期说明进程活着但卡住了（或者被冻住了），杀掉重来。
+			if beat_age; then
+				_lim=$((INTERVAL * 3 + 60))
+				[ "$_BA" -le "$_lim" ] && exit 0
+			else
+				exit 0
+			fi
+			kill "$_p" 2>/dev/null
+		fi
+		rm -f "$PIDF"
 	fi
 
 	if command -v setsid >/dev/null 2>&1; then
@@ -253,14 +297,15 @@ start)
 	else
 		sh "$SELF" loop < /dev/null > /dev/null 2>&1 &
 	fi
-	printf '%s\n' "$!" > "$PIDF"
+	# 不在这里写 $!：setsid 有可能 fork，$! 是那个马上退出的中间进程，
+	# 写进去就成了一个「死号码」。loop 分支自己会把真实 PID 写进 .pid。
 	exit 0
 	;;
 
 stop)
 	if [ -f "$PIDF" ]; then
 		_p=$(cat "$PIDF" 2>/dev/null)
-		[ -n "$_p" ] && kill "$_p" 2>/dev/null
+		alive "$_p" && kill "$_p" 2>/dev/null
 		rm -f "$PIDF"
 	fi
 	end_session
@@ -270,7 +315,7 @@ stop)
 status)
 	if [ -f "$PIDF" ]; then
 		_p=$(cat "$PIDF" 2>/dev/null)
-		[ -n "$_p" ] && kill -0 "$_p" 2>/dev/null && printf '%s\n' "$_p"
+		alive "$_p" && printf '%s\n' "$_p"
 	fi
 	exit 0
 	;;
@@ -285,6 +330,8 @@ loop)
 	printf '%s\n' "$$" > "$PIDF"
 	trap 'rm -f "$PIDF"' EXIT INT TERM HUP
 	while :; do
+		# 心跳：页面靠它确认「记录中」是真的在转，而不是 .pid 里留了个死号码
+		printf '%s\n' "$(date +%s)" > "$BEATF" 2>/dev/null
 		step
 		sleep "$INTERVAL"
 	done

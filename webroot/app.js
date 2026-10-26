@@ -764,25 +764,32 @@
   function renderLogState(k) {
     var running = (k.log_running || '').trim() === '1';
     var plugged = (k.log_plugged || '').trim() === '1';
+    var dirOk = (k.log_dir_ok || '').trim() === '1';
+    var beat = num(k.log_beat);
     var iv = num(k.log_interval);
     var cur = (k.log_current || '').trim();
     var cnt = num(k.log_count) || 0;
+    var ivv = (iv !== null ? iv : 10);
 
     var chip = $('logStateChip');
     chip.textContent = running ? '记录中' : '未在记录';
     chip.className = 'chip small ' + (running ? 'ok' : 'warn');
 
-    setText('logInterval', iv !== null ? String(iv) : '10');
+    setText('logInterval', String(ivv));
     $('logStartBox').classList.toggle('hidden', running);
 
-    /* 四句话覆盖全部状态，让用户不用猜：
-         进程没跑 / 在跑且在记 / 在跑且插着电但还没采到点 / 在跑但没插电 */
-    if (!running) {
+    /* 几句话覆盖全部状态，让用户不用猜：
+         目录没建好 / 进程没跑 / 心跳停了 / 在跑且在记 / 在跑且插着电但还没采到点 / 在跑但没插电 */
+    if (!dirOk) {
+      setText('logHintText', '日志目录还不存在（' + (k.log_dir || '') + '），大概一次都没记过。点下面的按钮启动。');
+    } else if (!running && beat !== null && beat >= 0) {
+      setText('logHintText', '后台记录进程好像卡住了（上次心跳 ' + beat + ' 秒前）。点下面的按钮重新启动。');
+    } else if (!running) {
       setText('logHintText', '后台记录进程没有在跑，插拔充电器不会被记下来。点下面的按钮启动。');
     } else if (cur) {
       setText('logHintText', '正在记录这次充电（' + cur + '），拔出充电器后结束。');
     } else if (plugged) {
-      setText('logHintText', '充电器已插上，正在等第一个采样点（最多 ' + (iv !== null ? iv : 10) + ' 秒）。');
+      setText('logHintText', '充电器已插上，正在等第一个采样点（最多 ' + ivv + ' 秒）。');
     } else {
       setText('logHintText', '后台在跑，现在没插充电器 —— 插上就会自动开始记。已有 ' + cnt + ' 次记录。');
     }
@@ -795,7 +802,10 @@
     if (!logList.length) {
       var li0 = document.createElement('li');
       li0.className = 'empty';
-      li0.textContent = '还没有记录。插上充电器就会开始记。';
+      /* 把目录写出来：真机上读不到日志时，用户至少能自己去文件管理器看一眼，
+         而不是对着「还没有记录」干瞪眼。 */
+      li0.textContent = logListErr || ('还没有记录。插上充电器就会开始记。'
+        + (logDirPath ? '（目录：' + logDirPath + '）' : ''));
       ul.appendChild(li0);
       return;
     }
@@ -883,6 +893,7 @@
         }
 
         renderLogState(k);
+        logDirPath = (k['log_dir'] || '').trim();
 
         /* 指纹比对：静默刷新时没变就一个节点都不动。但非静默（刚把列表清成
            「读取中…」）必须重画，否则会把自己刚写的占位留在屏幕上；
@@ -892,6 +903,15 @@
         logSig = sig;
         logsDrawn = true;
         logList = next;
+        logListErr = '';
+        /* 有文件却一条都解析不出来：说清楚，不要假装「还没有记录」。
+           真机上 awk 不一定有（Android 的 toybox 就没带），脚本已经会退回
+           纯 shell 扫；这里兜底报告解析结果对不上的情况。 */
+        var files = num(k['log_count']);
+        if (files !== null && files > next.length) {
+          logListErr = '有 ' + files + ' 个日志文件，只解析出 ' + next.length
+                     + ' 条。' + ((k['log_err'] || '').trim() ? '（' + (k['log_err'] || '').trim() + '）' : '');
+        }
         renderLogList();
       })
       .catch(function (err) {
@@ -910,6 +930,8 @@
 
   var logSig = '';
   var logsDrawn = false;
+  var logListErr = '';
+  var logDirPath = '';
 
   function listSig(list) {
     var a = [];

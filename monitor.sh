@@ -24,6 +24,7 @@
 # ============================================================================
 
 SYS="${SYSFS_ROOT:-/sys}"
+PROC="${PROC_ROOT:-/proc}"
 MODDIR="${MODDIR:-/data/adb/modules/dtbo_charge_unlock}"
 
 emit() { printf '%s=%s\n' "$1" "$2"; }
@@ -64,9 +65,24 @@ kv "$CFG" CHARGELOG_INTERVAL
 LOG_INTERVAL="$_KV"
 case "$LOG_INTERVAL" in ''|*[!0-9]*) LOG_INTERVAL=10 ;; esac
 
+BEATF="$LOGDIR/.beat"
+
+# .pid 里的号码是不是真的还属于采集进程（跟 chargelog.sh 的 alive() 同一套判据）。
+# 只看 kill -0 会把「号码已经被别的进程复用」当成还活着，页面就一直显示「记录中」。
+alive() {
+	[ -n "$1" ] || return 1
+	kill -0 "$1" 2>/dev/null || return 1
+	[ -r "$PROC/$1/cmdline" ] || return 0
+	command -v grep >/dev/null 2>&1 || return 0
+	grep -qa 'chargelog' "$PROC/$1/cmdline" 2>/dev/null && return 0
+	return 1
+}
+
 log_state() {
 	emit log_dir      "$LOGDIR"
 	emit log_interval "$LOG_INTERVAL"
+
+	if [ -d "$LOGDIR" ]; then emit log_dir_ok 1; else emit log_dir_ok 0; fi
 
 	_c=0
 	for _x in "$LOGDIR"/*.log; do
@@ -78,14 +94,31 @@ log_state() {
 	emit log_current "$_RV"
 
 	_running=0
+	_beat=-1
 	if [ -f "$LOGDIR/.pid" ]; then
 		rv "$LOGDIR/.pid"
 		_p="$_RV"
-		if [ -n "$_p" ] && kill -0 "$_p" 2>/dev/null; then
+		if alive "$_p"; then
 			_running=1
+			# 心跳（v2.0.1 起）：进程活着但卡住时也能看出来。
+			# 老版本没有 .beat 文件，读不到就不做判断。
+			rv "$BEATF"
+			case "$_RV" in
+				''|*[!0-9]*) _beat=-1 ;;
+				*) _now=$(date +%s 2>/dev/null)
+				   case "$_now" in
+				   	''|*[!0-9]*) _beat=-1 ;;
+				   	*) _beat=$((_now - _RV)) ;;
+				   esac ;;
+			esac
+			if [ "$_beat" -ge 0 ]; then
+				_lim=$((LOG_INTERVAL * 3 + 60))
+				[ "$_beat" -le "$_lim" ] || _running=0
+			fi
 		fi
 	fi
 	emit log_running "$_running"
+	emit log_beat "$_beat"
 
 	# 充电器插没插。页面靠这个区分「在等充电器」和「插上了还没采到点」，
 	# 否则用户只能看到一个「记录中」，根本判断不出到底记没记。
@@ -131,8 +164,15 @@ list_sessions() {
 		return 0
 	fi
 
+	# 先试 awk（一次 fork 扫完，快）。注意两件事：
+	#   1. 以前把 stderr 直接丢进 /dev/null —— 万一设备上没有 awk，或者 awk
+	#      崩了，这里会安静地吐出一个空列表，页面就成了「读取不到历史日志」，
+	#      而且完全看不出原因。现在把 stderr 一起收回来，非数据行当成 log_err。
+	#   2. 输出先收进变量再在 shell 里拆，不再用管道 —— 管道里的 {} 是子 shell。
+	_awk_out=""
+	if command -v awk >/dev/null 2>&1 && [ "${MONITOR_NO_AWK:-0}" != "1" ]; then
 	# shellcheck disable=SC2086
-	awk -F, '
+	_awk_out=$(awk -F, '
 		function reset() {
 			st = ""; en = ""; ab = 0; cnt = 0
 			c0 = ""; c1 = ""; cf = ""; cl = ""
@@ -169,46 +209,119 @@ list_sessions() {
 			cl = $6
 		}
 		END { flush() }
-	' $_files 2>/dev/null | {
-		_i=0
-		while IFS= read -r _l; do
-			case "$_l" in
-				*'|'*) ;;
-				*) continue ;;
-			esac
-			# 拆 13 段
-			_r="$_l"
-			_nm=${_r%%|*}; _r=${_r#*|}
-			_st=${_r%%|*}; _r=${_r#*|}
-			_en=${_r%%|*}; _r=${_r#*|}
-			_ab=${_r%%|*}; _r=${_r#*|}
-			_cn=${_r%%|*}; _r=${_r#*|}
-			_p0=${_r%%|*}; _r=${_r#*|}
-			_p1=${_r%%|*}; _r=${_r#*|}
-			_tm=${_r%%|*}; _r=${_r#*|}
-			_im=${_r%%|*}; _r=${_r#*|}
-			_vm=${_r%%|*}; _r=${_r#*|}
-			_pm=${_r%%|*}; _r=${_r#*|}
-			_cf=${_r%%|*}; _r=${_r#*|}
-			_cl=${_r}
+	' $_files 2>&1)
+	fi
 
-			emit "log.$_i.name"     "$_nm"
-			emit "log.$_i.start"    "$_st"
-			emit "log.$_i.end"      "$_en"
-			emit "log.$_i.aborted"  "$_ab"
-			emit "log.$_i.samples"  "$_cn"
-			emit "log.$_i.cap0"     "$_p0"
-			emit "log.$_i.cap1"     "$_p1"
-			emit "log.$_i.temp_max" "$_tm"
-			emit "log.$_i.cur_max"  "$_im"
-			emit "log.$_i.volt_max" "$_vm"
-			emit "log.$_i.pmax_mw"  "$_pm"
-			emit "log.$_i.cnt0"     "$_cf"
-			emit "log.$_i.cnt1"     "$_cl"
+	_i=0
+	_err=""
+	# 用 here-doc 读，不用管道：管道里的 while 是子 shell，统计结果传不出来，
+	# 而且不用 for 展开（避免数据里的字符被当成通配符）。
+	while IFS= read -r _l; do
+		case "$_l" in
+			'') continue ;;
+			*'|'*) ;;
+			*) _err="$_l"; continue ;;
+		esac
+		# 拆 13 段
+		_r="$_l"
+		_nm=${_r%%|*}; _r=${_r#*|}
+		_st=${_r%%|*}; _r=${_r#*|}
+		_en=${_r%%|*}; _r=${_r#*|}
+		_ab=${_r%%|*}; _r=${_r#*|}
+		_cn=${_r%%|*}; _r=${_r#*|}
+		_p0=${_r%%|*}; _r=${_r#*|}
+		_p1=${_r%%|*}; _r=${_r#*|}
+		_tm=${_r%%|*}; _r=${_r#*|}
+		_im=${_r%%|*}; _r=${_r#*|}
+		_vm=${_r%%|*}; _r=${_r#*|}
+		_pm=${_r%%|*}; _r=${_r#*|}
+		_cf=${_r%%|*}; _r=${_r#*|}
+		_cl=${_r}
+
+		emit "log.$_i.name"     "$_nm"
+		emit "log.$_i.start"    "$_st"
+		emit "log.$_i.end"      "$_en"
+		emit "log.$_i.aborted"  "$_ab"
+		emit "log.$_i.samples"  "$_cn"
+		emit "log.$_i.cap0"     "$_p0"
+		emit "log.$_i.cap1"     "$_p1"
+		emit "log.$_i.temp_max" "$_tm"
+		emit "log.$_i.cur_max"  "$_im"
+		emit "log.$_i.volt_max" "$_vm"
+		emit "log.$_i.pmax_mw"  "$_pm"
+		emit "log.$_i.cnt0"     "$_cf"
+		emit "log.$_i.cnt1"     "$_cl"
+		_i=$((_i + 1))
+	done <<LOGEOF
+$_awk_out
+LOGEOF
+
+	# awk 没装 / 崩了 / 输出解析不出来：退回纯 shell 扫一遍。
+	# 慢一些，但「明明有日志文件却一条都列不出来」不该发生。
+	if [ "$_i" -eq 0 ]; then
+		_i=0
+		for _f in $_files; do
+			_s_st=""; _s_en=""; _s_ab=0; _s_cn=0
+			_s_c0=""; _s_c1=""; _s_tm=0; _s_im=0; _s_vm=0; _s_pm=0
+			_s_cf=""; _s_cl=""
+			while IFS=, read -r _t _cap _tmp _cur _vol _cnt _sts _pow _uv _ui _ct \
+				|| [ -n "$_t" ]; do
+				case "$_t" in
+					'#start='*)   _s_st=${_t#*=}; continue ;;
+					'#end='*)     _s_en=${_t#*=}; continue ;;
+					'#aborted=1') _s_ab=1; continue ;;
+					'#'*)         continue ;;
+					''|*[!0-9]*)  continue ;;
+				esac
+				_s_cn=$((_s_cn + 1))
+				if [ "$_s_cn" -eq 1 ]; then _s_c0="$_cap"; _s_cf="$_cnt"; fi
+				_s_c1="$_cap"
+				_s_cl="$_cnt"
+				case "$_tmp" in
+					''|*[!0-9-]*) ;;
+					*) [ "$_tmp" -gt "$_s_tm" ] && _s_tm="$_tmp" ;;
+				esac
+				_a="$_cur"
+				case "$_a" in -*) _a=${_a#-} ;; esac
+				case "$_a" in
+					''|*[!0-9]*) _a=0 ;;
+				esac
+				[ "$_a" -gt "$_s_im" ] && _s_im="$_a"
+				case "$_vol" in
+					''|*[!0-9]*) _v=0 ;;
+					*) _v="$_vol" ;;
+				esac
+				[ "$_v" -gt "$_s_vm" ] && _s_vm="$_v"
+				case "$_pow" in
+					''|*[!0-9]*) _p=0 ;;
+					*) _p=$((_pow / 1000)) ;;
+				esac
+				if [ "$_p" -le 0 ] && [ "$_v" -gt 0 ] && [ "$_a" -gt 0 ]; then
+					_p=$(( (_a / 1000) * (_v / 1000) / 1000 ))
+				fi
+				[ "$_p" -gt "$_s_pm" ] && _s_pm="$_p"
+			done < "$_f"
+
+			emit "log.$_i.name"     "${_f##*/}"
+			emit "log.$_i.start"    "$_s_st"
+			emit "log.$_i.end"      "$_s_en"
+			emit "log.$_i.aborted"  "$_s_ab"
+			emit "log.$_i.samples"  "$_s_cn"
+			emit "log.$_i.cap0"     "$_s_c0"
+			emit "log.$_i.cap1"     "$_s_c1"
+			emit "log.$_i.temp_max" "$_s_tm"
+			emit "log.$_i.cur_max"  "$_s_im"
+			emit "log.$_i.volt_max" "$_s_vm"
+			emit "log.$_i.pmax_mw"  "$_s_pm"
+			emit "log.$_i.cnt0"     "$_s_cf"
+			emit "log.$_i.cnt1"     "$_s_cl"
 			_i=$((_i + 1))
 		done
-		emit log.list_count "$_i"
-	}
+	fi
+
+	emit log.list_count "$_i"
+	[ -n "$_err" ] && emit log_err "$_err"
+	return 0
 }
 
 # -------------------------------------------------------------- 单个会话导出 ---

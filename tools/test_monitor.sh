@@ -176,6 +176,16 @@ expect "$OUT" log_running 0
 expect "$OUT" log_current ""
 # 页面靠这一项区分「在等充电器」和「插上了还没采到点」
 expect "$OUT" log_plugged 1
+# 日志目录在不在 / 采集进程心跳多久之前。页面靠这两项区分
+# 「一次都没记过」「进程卡住了」「正常在跑」，不然只有一个「记录中」看不出名堂。
+expect "$OUT" log_dir_ok 0
+expect "$OUT" log_beat -1
+# 正常路径下不该冒出 log_err
+if grep -q '^log_err=' "$OUT"; then
+	bad "正常路径不该有 log_err"
+else
+	ok "正常路径没有 log_err"
+fi
 
 # 拔掉所有供电源、电池也不是 Charging/Full 时，必须报 0
 w "$PS/usb/online" 0

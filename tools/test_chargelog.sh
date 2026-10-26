@@ -295,6 +295,99 @@ else
 	ok "最旧的会话已被淘汰"
 fi
 
+echo "== .pid 里的号码被别人复用了：必须重新拉起 =="
+# 场景：进程被 SIGKILL 或掉电杀掉时 trap 来不及跑，.pid 留在原地，
+# 而那个 PID 可能已经被系统分配给了别的进程 —— kill -0 照样成功。
+# 以前 start 会直接 exit 0（永远不再启动），页面就一直显示「记录中」，
+# 实际一个采样点都没写。现在要核对 /proc/<pid>/cmdline。
+rm -rf "$LOGDIR"
+mkdir -p "$LOGDIR" "$SB/proc"
+sleep 60 &
+_other=$!
+mkdir -p "$SB/proc/$_other"
+printf 'sleep\00060\000' > "$SB/proc/$_other/cmdline"
+printf '%s\n' "$_other" > "$LOGDIR/.pid"
+PROC_ROOT="$SB/proc" SYSFS_ROOT="$SYS" MODDIR="$MOD" \
+	sh "$MODDIR_SRC/monitor.sh" --logs > "$SB/reuse.txt" 2>&1
+_v=$(grep '^log_running=' "$SB/reuse.txt" | cut -d= -f2-)
+[ "$_v" = "0" ] && ok "号码被复用时不认成在跑" || bad "log_running [$_v] 应为 0"
+PROC_ROOT="$SB/proc" SYSFS_ROOT="$SYS" MODDIR="$MOD" sh "$MOD/chargelog.sh" start >/dev/null 2>&1
+sleep 1
+_newpid=$(cat "$LOGDIR/.pid" 2>/dev/null)
+[ -n "$_newpid" ] && [ "$_newpid" != "$_other" ] \
+	&& ok "start 换掉了被复用的号码（$_newpid）" || bad "start 没有重新拉起 [$_newpid]"
+kill "$_newpid" 2>/dev/null
+kill "$_other" 2>/dev/null
+
+echo "== 心跳过期（进程还活着但卡住）：start 要杀掉重来 =="
+rm -rf "$LOGDIR"
+mkdir -p "$LOGDIR" "$SB/proc"
+sleep 60 &
+_stuck=$!
+mkdir -p "$SB/proc/$_stuck"
+printf 'sh\000/data/adb/modules/dtbo_charge_unlock/chargelog.sh\000loop\000' > "$SB/proc/$_stuck/cmdline"
+printf '%s\n' "$_stuck" > "$LOGDIR/.pid"
+printf '%s\n' "$(( $(date +%s) - 600 ))" > "$LOGDIR/.beat"
+PROC_ROOT="$SB/proc" SYSFS_ROOT="$SYS" MODDIR="$MOD" \
+	sh "$MODDIR_SRC/monitor.sh" --logs > "$SB/stuck.txt" 2>&1
+_v=$(grep '^log_running=' "$SB/stuck.txt" | cut -d= -f2-)
+[ "$_v" = "0" ] && ok "心跳过期时不认成在跑" || bad "log_running [$_v] 应为 0"
+_v=$(grep '^log_beat=' "$SB/stuck.txt" | cut -d= -f2-)
+[ "$_v" -ge 590 ] 2>/dev/null && ok "log_beat 报出了过期秒数 [$_v]" || bad "log_beat [$_v]"
+PROC_ROOT="$SB/proc" SYSFS_ROOT="$SYS" MODDIR="$MOD" sh "$MOD/chargelog.sh" start >/dev/null 2>&1
+sleep 1
+_newpid=$(cat "$LOGDIR/.pid" 2>/dev/null)
+[ -n "$_newpid" ] && [ "$_newpid" != "$_stuck" ] \
+	&& ok "卡住的进程被换掉（$_newpid）" || bad "卡住的进程没被换掉 [$_newpid]"
+kill "$_newpid" 2>/dev/null
+kill "$_stuck" 2>/dev/null
+
+echo "== 心跳新鲜时不要重复启动 =="
+rm -rf "$LOGDIR"
+mkdir -p "$LOGDIR" "$SB/proc"
+sleep 60 &
+_live=$!
+mkdir -p "$SB/proc/$_live"
+printf 'sh\000/data/adb/modules/dtbo_charge_unlock/chargelog.sh\000loop\000' > "$SB/proc/$_live/cmdline"
+printf '%s\n' "$_live" > "$LOGDIR/.pid"
+printf '%s\n' "$(date +%s)" > "$LOGDIR/.beat"
+PROC_ROOT="$SB/proc" SYSFS_ROOT="$SYS" MODDIR="$MOD" \
+	sh "$MODDIR_SRC/monitor.sh" --logs > "$SB/live.txt" 2>&1
+_v=$(grep '^log_running=' "$SB/live.txt" | cut -d= -f2-)
+[ "$_v" = "1" ] && ok "心跳新鲜时算在跑" || bad "log_running [$_v] 应为 1"
+PROC_ROOT="$SB/proc" SYSFS_ROOT="$SYS" MODDIR="$MOD" sh "$MOD/chargelog.sh" start >/dev/null 2>&1
+_after=$(cat "$LOGDIR/.pid" 2>/dev/null)
+[ "$_after" = "$_live" ] && ok "没有重复启动" || bad "重复启动了 [$_after]"
+kill "$_live" 2>/dev/null
+
+echo "== 没有 awk 也能列出会话（纯 shell 兜底） =="
+rm -rf "$LOGDIR"
+mkdir -p "$LOGDIR"
+cat > "$LOGDIR/20251001-100000.log" <<'EOF'
+#dtbo-chargelog v2
+#start=1759284000
+1759284010,40,320,2000000,4000000,1000,Charging,8000000,9000000,3000000,330
+1759284020,42,322,1900000,4100000,1200,Charging,7790000,9000000,3000000,331
+#end=1759284030
+EOF
+CHARGELOG_DIR="$LOGDIR" MODDIR="$MOD" sh "$MODDIR_SRC/monitor.sh" --logs > "$SB/awk_ok.txt" 2>&1
+MONITOR_NO_AWK=1 CHARGELOG_DIR="$LOGDIR" MODDIR="$MOD" \
+	sh "$MODDIR_SRC/monitor.sh" --logs > "$SB/awk_no.txt" 2>&1
+_n=$(grep '^log.list_count=' "$SB/awk_no.txt" | cut -d= -f2-)
+[ "$_n" = "1" ] && ok "兜底也列出 1 个会话" || bad "兜底 list_count [$_n] 应为 1"
+_v=$(grep '^log.0.pmax_mw=' "$SB/awk_no.txt" | cut -d= -f2-)
+[ "$_v" = "8000" ] && ok "兜底 pmax_mw 8000" || bad "兜底 pmax_mw [$_v]"
+_v=$(grep '^log.0.samples=' "$SB/awk_no.txt" | cut -d= -f2-)
+[ "$_v" = "2" ] && ok "兜底 samples 2" || bad "兜底 samples [$_v]"
+# 两种实现的结果必须一模一样（除 log_err）
+grep -v '^log_err=' "$SB/awk_ok.txt" > "$SB/a1.txt"
+grep -v '^log_err=' "$SB/awk_no.txt" > "$SB/a2.txt"
+if cmp -s "$SB/a1.txt" "$SB/a2.txt"; then
+	ok "兜底结果与 awk 逐行一致"
+else
+	bad "兜底结果与 awk 不一致"
+fi
+
 echo ""
 if [ "$fail" -eq 0 ]; then
 	echo "=== chargelog.sh 自测通过 ==="

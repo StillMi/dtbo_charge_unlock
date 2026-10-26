@@ -209,6 +209,10 @@ font:11px/1.55 monospace;white-space:pre-wrap">check 未运行</pre>
         (L.emptyRows + '|' + (L.emptyText || '')).slice(0, 70));
     chk('空列表说明没插充电器', /没插充电器/.test(L.emptyHint || ''), L.emptyHint);
     chk('空列表状态标签', /记录中|未在记录/.test(L.emptyChip || ''), L.emptyChip);
+    /* 采集进程卡住：不能继续显示「正在记录」，要说出「卡住了」并给重启入口 */
+    chk('卡住时标签是未在记录', (L.stallChip || '') === '未在记录', L.stallChip);
+    chk('卡住时说明提到心跳', /卡住|心跳/.test(L.stallHint || ''), L.stallHint);
+    chk('卡住时显示启动按钮', L.stallStartHidden === false, 'hidden=' + L.stallStartHidden);
     chk('打开会话', L.opened === true && L.title !== '—', L.title);
     chk('会话统计已填', (L.stats || 0) >= 9, 'rows=' + L.stats);
     chk('会话含平均功率', /平均功率/.test(L.statsText || ''), '');
@@ -308,6 +312,7 @@ TABS = """<script>
                            statsText: '', intv: '', startHidden: false,
                            emptyRows: -1, emptyText: '', emptyHint: '',
                            emptyChip: '', hint: '', thermalSame: false,
+                           stallHint: '', stallChip: '', stallStartHidden: null,
                            rawKept: false, rawLen: 0 };
 
   function txt(id) {
@@ -388,8 +393,8 @@ TABS = """<script>
      看列表会不会卡在「读取中…」。这是用户实际遇到的那个状态。 */
   function phaseEmpty(logsBtn, liveBtn) {
     window.__setLogs('log_dir=/data/adb/dtbo_charge_unlock/chargelog\\n'
-      + 'log_interval=10\\nlog_count=0\\nlog_current=\\n'
-      + 'log_running=1\\nlog_plugged=0\\nlog.list_count=0\\n');
+      + 'log_interval=10\\nlog_dir_ok=1\\nlog_count=0\\nlog_current=\\n'
+      + 'log_running=1\\nlog_beat=4\\nlog_plugged=0\\nlog.list_count=0\\n');
     if (liveBtn) liveBtn.click();
     setTimeout(function () {
       if (logsBtn) logsBtn.click();
@@ -399,6 +404,28 @@ TABS = """<script>
         L.emptyText = (u2 && u2.children[0]) ? txt2(u2.children[0]) : '';
         L.emptyHint = txt('logHintText');
         L.emptyChip = txt('logStateChip');
+        if (liveBtn) liveBtn.click();
+        phaseStalled(logsBtn, liveBtn);
+      }, 900);
+    }, 400);
+  }
+
+  /* 第四轮：采集进程卡住了（.pid 还在、但心跳很久没更新）。
+     用户看到的就是「一直卡在记录中不刷新」，页面必须说清楚是卡住，
+     而不是继续显示「正在记录」。 */
+  function phaseStalled(logsBtn, liveBtn) {
+    window.__setLogs('log_dir=/data/adb/dtbo_charge_unlock/chargelog\\n'
+      + 'log_interval=10\\nlog_dir_ok=1\\nlog_count=3\\nlog_current=\\n'
+      + 'log_running=0\\nlog_beat=600\\nlog_plugged=0\\nlog.list_count=0\\n');
+    setTimeout(function () {
+      if (logsBtn) logsBtn.click();
+      setTimeout(function () {
+        L.stallHint = txt('logHintText');
+        L.stallChip = txt('logStateChip');
+        L.stallStartHidden = (function () {
+          var b = document.getElementById('logStartBox');
+          return b ? b.classList.contains('hidden') : null;
+        })();
         if (liveBtn) liveBtn.click();
         L.done = true;
       }, 900);
@@ -489,9 +516,11 @@ def fake_fixtures(now):
 
     rows = ["log_dir=/data/adb/dtbo_charge_unlock/chargelog",
             "log_interval=10",
+            "log_dir_ok=1",
             "log_count=%d" % len(specs),
             "log_current=" + name_of(specs[2][0]),
             "log_running=1",
+            "log_beat=3",
             "log_plugged=1"]
     # monitor.sh --logs 是 ls -1t，最新的排最前，假数据也要照这个顺序
     order = [2, 1, 0]
