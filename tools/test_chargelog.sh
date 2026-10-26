@@ -14,6 +14,12 @@ SB="$2"
 	exit 2
 }
 
+# 沙盒路径必须是个目录名，不能是文件。
+# （曾经误把 dtc.exe 的路径当沙盒传进来，rm -rf 直接把编译器删了）
+case "$SB" in
+*.[Ee][Xx][Ee]|*.[Dd][Ll][Ll]|*.[Ii][Mm][Gg]|*.[Dd][Tt][Bb]|*.[Dd][Tt][Ss]|*.[Zz][Ii][Pp])
+	echo "沙盒路径不能是文件: $SB" >&2; exit 2 ;;
+esac
 rm -rf "$SB"
 mkdir -p "$SB" || exit 1
 
@@ -437,6 +443,51 @@ _v=$(grep '^log.0.samples=' "$SB/empty1.txt" | cut -d= -f2-)
 [ "$_v" = "0" ] && ok "空文件 samples=0" || bad "空文件 samples [$_v] 应为 0"
 _v=$(grep '^log.1.samples=' "$SB/empty1.txt" | cut -d= -f2-)
 [ "$_v" = "1" ] && ok "下一个文件 samples=1" || bad "下一个文件 samples [$_v] 应为 1"
+
+echo "== 有空文件时条数必须和文件数对上（页面不会谎报「写坏了」）=="
+# 真机上出现过「有 6 个日志文件，只解析出 0 条」。根因之一：awk 的 FNR == 1
+# 只在「文件第一行」触发，0 字节文件一行都没有，被安静跳过 —— log_count 数到
+# 6、列表里只有 5，页面就报「文件可能写坏了」，其实文件没坏，是扫描漏了。
+# 修法是：有空文件就整体走纯 shell（按文件循环，一个文件必出一条）。
+rm -rf "$LOGDIR"
+mkdir -p "$LOGDIR"
+for _d in 01 02 03 04 05; do
+	cat > "$LOGDIR/202510${_d}-100000.log" <<'EOF'
+#dtbo-chargelog v2
+#start=1759284000
+1759284010,40,320,2000000,4000000,1000,Charging,8000000,9000000,3000000,330
+#end=1759284030
+EOF
+done
+: > "$LOGDIR/20251006-100000.log"
+CHARGELOG_DIR="$LOGDIR" MODDIR="$MOD" \
+	sh "$MODDIR_SRC/monitor.sh" --logs > "$SB/mixed.txt" 2>&1
+_v=$(grep '^log_count=' "$SB/mixed.txt" | cut -d= -f2-)
+[ "$_v" = "6" ] && ok "混合目录 log_count=6" || bad "log_count [$_v] 应为 6"
+_v=$(grep '^log.list_count=' "$SB/mixed.txt" | cut -d= -f2-)
+[ "$_v" = "6" ] && ok "混合目录 list_count=6（空文件也列出来）" \
+	|| bad "list_count [$_v] 应为 6，不能漏掉空文件"
+_v=$(grep -c '^log\.[0-9]*\.name=' "$SB/mixed.txt")
+[ "$_v" = "6" ] && ok "混合目录 6 个会话名都在" || bad "会话名 [$_v] 个应为 6"
+_v=$(grep '^log.0.samples=' "$SB/mixed.txt" | cut -d= -f2-)
+[ "$_v" = "0" ] && ok "最新那个是空文件，samples=0" || bad "log.0.samples [$_v] 应为 0"
+_v=$(grep '^log.1.samples=' "$SB/mixed.txt" | cut -d= -f2-)
+[ "$_v" = "1" ] && ok "空文件后面那个 samples=1" || bad "log.1.samples [$_v] 应为 1"
+_v=$(grep '^log_list_done=' "$SB/mixed.txt" | cut -d= -f2-)
+[ "$_v" = "1" ] && ok "混合目录仍有哨兵" || bad "log_list_done [$_v]"
+
+echo "== 全是 0 字节文件也要列出来 =="
+rm -rf "$LOGDIR"
+mkdir -p "$LOGDIR"
+for _d in 01 02 03 04 05 06; do
+	: > "$LOGDIR/202510${_d}-100000.log"
+done
+CHARGELOG_DIR="$LOGDIR" MODDIR="$MOD" \
+	sh "$MODDIR_SRC/monitor.sh" --logs > "$SB/allempty.txt" 2>&1
+_v=$(grep '^log.list_count=' "$SB/allempty.txt" | cut -d= -f2-)
+[ "$_v" = "6" ] && ok "6 个空文件也列 6 条" || bad "list_count [$_v] 应为 6"
+_v=$(grep '^log_bad=' "$SB/allempty.txt" | cut -d= -f2-)
+[ -z "$_v" ] && ok "空文件不算「读不出来」" || bad "log_bad [$_v] 不该点名空文件"
 
 echo ""
 if [ "$fail" -eq 0 ]; then

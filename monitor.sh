@@ -176,10 +176,15 @@ list_sessions() {
 
 	_files=""
 	_ln=0
+	_z=0
 	# shellcheck disable=SC2086
 	for _f in $_all; do
 		_files="$_files $_f"
 		_ln=$((_ln + 1))
+		# 顺手记一下有没有 0 字节文件：awk 的 FNR == 1 只在「文件第一行」
+		# 触发，空文件一行都没有，会被安静地漏掉（log_count 数到了、列表里
+		# 没有），页面就谎报「文件可能写坏了」。有空文件就直接走纯 shell。
+		[ -s "$_f" ] || _z=$((_z + 1))
 		[ "$_ln" -ge 40 ] && break
 	done
 
@@ -195,7 +200,7 @@ list_sessions() {
 	#      而且完全看不出原因。现在把 stderr 一起收回来，非数据行当成 log_err。
 	#   2. 输出先收进变量再在 shell 里拆，不再用管道 —— 管道里的 {} 是子 shell。
 	_awk_out=""
-	if command -v awk >/dev/null 2>&1 && [ "${MONITOR_NO_AWK:-0}" != "1" ]; then
+	if [ "$_z" -eq 0 ] && command -v awk >/dev/null 2>&1 && [ "${MONITOR_NO_AWK:-0}" != "1" ]; then
 	# shellcheck disable=SC2086
 	_awk_out=$(awk -F, '
 		function reset() {
@@ -281,9 +286,14 @@ list_sessions() {
 $_awk_out
 LOGEOF
 
-	# awk 没装 / 崩了 / 输出解析不出来：退回纯 shell 扫一遍。
-	# 慢一些，但「明明有日志文件却一条都列不出来」不该发生。
-	if [ "$_i" -eq 0 ]; then
+	# 两个触发条件：
+	#   1. 一条都没解析出来（awk 没装 / 崩了 / 输出看不懂）；
+	#   2. 解析出来的条数比文件数少 —— 这个最坑。awk 的 FNR == 1 只在
+	#      「文件的第一行」触发，0 字节文件一行都没有，于是它被安静地跳过：
+	#      log_count=6、log.list_count=5，页面就报「有 6 个日志文件，只解析
+	#      出 5 条（文件可能写坏了）」—— 其实文件没坏，是扫描漏了它。
+	# 纯 shell 那条路按文件循环，一个文件必出一条，条数一定对得上。
+	if [ "$_i" -lt "$_ln" ]; then
 		_i=0
 		for _f in $_files; do
 			_s_st=""; _s_en=""; _s_ab=0; _s_cn=0
@@ -349,6 +359,13 @@ LOGEOF
 
 	emit log.list_count "$_i"
 	[ -n "$_err" ] && emit log_err "$_err"
+	# 读不出来的文件点名报出去。以前页面只会笼统地说「文件可能写坏了」，
+	# 用户根本不知道该看哪一个；现在至少知道是哪个文件、要不要去删掉它。
+	_bad=""
+	for _f in $_files; do
+		[ -r "$_f" ] || _bad="$_bad ${_f##*/}"
+	done
+	[ -n "$_bad" ] && emit log_bad "$_bad"
 	# 结束哨兵：页面靠它区分「确实没有会话」和「脚本被中断/超时，
 	# 只吐了半截」。没有这一行就说明列表没走完，不要当成 0 条。
 	emit log_list_done 1

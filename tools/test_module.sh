@@ -152,7 +152,7 @@ echo "反编译行数: $(wc -l < "$WORK2/final.dts")"
 echo "--- ffc_temp ---"
 grep 'ffc_temp_high' "$WORK2/final.dts" | head -n 3
 echo "--- mca_charger_thermal 状态 ---"
-sed -n '/mca_charger_thermal: mca_charger_thermal {/,/};/p' "$WORK2/final.dts" | grep 'status'
+sed -n '/mca_charger_thermal[[:space:]]*{/,/};/p' "$WORK2/final.dts" | grep 'status'
 
 echo
 echo "=== 测试通过 ==="

@@ -824,12 +824,18 @@
         var sub = document.createElement('div');
         sub.className = 'lt-sub';
         var bits = [];
-        if (s.cap0 !== null && s.cap1 !== null) {
-          bits.push(Math.round(s.cap0) + '% → ' + Math.round(s.cap1) + '%');
+        if (s.samples > 0) {
+          if (s.cap0 !== null && s.cap1 !== null) {
+            bits.push(Math.round(s.cap0) + '% → ' + Math.round(s.cap1) + '%');
+          }
+          if (s.pmax !== null) bits.push('峰值 ' + fmt(s.pmax, 1) + 'W');
+          if (s.tmax !== null) bits.push('最高 ' + fmt(s.tmax, 1) + '℃');
+          bits.push(s.samples + ' 点');
+        } else {
+          /* 0 字节、或者只写了文件头就没再采到点（插上又立刻拔掉、进程被杀）。
+             这种会话照样列出来，但要说明它是空的，别让人以为里面有数据。 */
+          bits.push('没有采样点（空文件）');
         }
-        if (s.pmax !== null) bits.push('峰值 ' + fmt(s.pmax, 1) + 'W');
-        if (s.tmax !== null) bits.push('最高 ' + fmt(s.tmax, 1) + '℃');
-        bits.push(s.samples + ' 点');
         sub.textContent = bits.join(' · ');
         if (s.aborted) {
           var b = document.createElement('span');
@@ -843,8 +849,10 @@
 
         var dur = document.createElement('div');
         dur.className = 'lt-dur';
-        /* 还没 #end 的就是正在记的那一次，别显示成「—」 */
-        dur.textContent = s.end ? durationText(s.start, s.end) : '进行中';
+        /* 还没 #end 的就是正在记的那一次，别显示成「—」。
+           没有采样点的空文件别写「进行中」——它根本不是在记。 */
+        if (s.samples <= 0 && !s.end) dur.textContent = '空会话';
+        else dur.textContent = s.end ? durationText(s.start, s.end) : '进行中';
 
         li.appendChild(main);
         li.appendChild(dur);
@@ -908,18 +916,24 @@
              - 列表最多显示 40 个，文件超过 40 个时「只解析出 40 条」是正常的；
              - 少了 log_list_done 哨兵说明脚本被中断/超时，只吐了半截，
                这时不能当成「没有记录」；
+             - log_bad 是脚本点名报的「这几个文件读不出来」，直接写文件名，
+               别再让用户猜「文件可能写坏了」是哪个；
              - 剩下那种「真的有文件却一条都解析不出来」才是问题。 */
         var files = num(k['log_count']);
         var cap = 40;
         var expect = files === null ? null : (files > cap ? cap : files);
         var done = (k['log_list_done'] || '').trim() === '1';
         var why = (k['log_err'] || '').trim();
+        var bad = (k['log_bad'] || '').trim();
         if (!done && files !== null && files > 0) {
           logListErr = '读日志列表时被中断了（只拿到 ' + next.length + ' 条）。'
                      + '日志文件多的时候第一次会慢一点。' + (why ? '（' + why + '）' : '');
+        } else if (bad) {
+          logListErr = '有 ' + bad.split(/\s+/).length + ' 个日志文件读不出来：' + bad
+                     + '。删掉它们就不会再报，剩下的照常显示。';
         } else if (expect !== null && expect > next.length) {
           logListErr = '有 ' + files + ' 个日志文件，只解析出 ' + next.length + ' 条。'
-                     + (why ? '（' + why + '）' : '（文件可能写坏了，或者读不出来）');
+                     + (why ? '（' + why + '）' : '（列表没读完，刷新一次试试）');
         }
         renderLogList();
       })
@@ -990,6 +1004,12 @@
     rows.push(['开始', shortTime(s.start)]);
     rows.push(['结束', s.end ? (clockOf(s.end) + '（' + durationText(s.start, s.end) + '）')
                              : '记录中']);
+    if (!pts.length) {
+      /* 空会话（0 字节、或者只写了文件头就没再采到点）：别摆一堆「—」，
+         直接说清楚为什么没东西可看。 */
+      rows.push(['内容', '这次充电没有采到任何数据点'
+        + (s.end ? '（插上没多久就拔掉了）' : '（文件还在写，稍等一下）')]);
+    }
     if (c0 !== null && c1 !== null) rows.push(['电量', Math.round(c0) + '% → ' + Math.round(c1) + '%']);
     if (mah !== null) rows.push(['充入', fmt(mah, 0) + ' mAh']);
     rows.push(['功率峰值', fmt(pmax, 1) + ' W']);
@@ -1212,6 +1232,7 @@
 
   var applying = false;
   var restoring = false;
+  var asking = false;
 
   function applyOut(text) {
     var el = $('applyOut');
@@ -1220,12 +1241,17 @@
   }
 
   function askConfirm(text) {
+    /* 同一时刻只允许一个确认框。两个流程（运行修改 / 恢复原厂）同时弹框时，
+       一次点击会同时触发两个 yes，后注册的那个被守卫挡掉、看着像「点了没反应」。 */
+    if (asking) return Promise.resolve(false);
+    asking = true;
     return new Promise(function (resolve) {
       var box = $('confirm');
       $('confirmText').innerHTML = text;
       box.classList.remove('hidden');
 
       function done(val) {
+        asking = false;
         box.classList.add('hidden');
         $('confirmYes').removeEventListener('click', yes);
         $('confirmNo').removeEventListener('click', no);

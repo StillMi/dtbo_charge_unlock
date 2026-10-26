@@ -162,7 +162,8 @@ font:11px/1.55 monospace;white-space:pre-wrap">check 未运行</pre>
     var rs = window.__restore || {};
     chk('点恢复弹出确认框', rs.opened === true, 'opened=' + rs.opened);
     chk('确认前不写分区', rs.calledBefore === false, 'calledBefore=' + rs.calledBefore);
-    chk('确认后调用 restore.sh', rs.called === true, (rs.calls || []).join(' | '));
+    chk('确认后调用 restore.sh', rs.called === true,
+        (rs.calls || []).join(' | '));
     chk('恢复按钮已复位', txt('btnRestore') === '恢复原厂 dtbo', txt('btnRestore'));
 
     var ab = document.getElementById('btnApply');
@@ -218,8 +219,12 @@ font:11px/1.55 monospace;white-space:pre-wrap">check 未运行</pre>
     chk('半截输出不说成没有记录', !/还没有记录/.test(L.partText || ''),
         (L.partText || '').slice(0, 40));
     chk('真读不出说成读不出来',
-        /只解析出 0 条/.test(L.mismText || '') && /读不出来|写坏/.test(L.mismText || ''),
+        /读不出来/.test(L.mismText || '') && /删掉/.test(L.mismText || ''),
         (L.mismText || '').slice(0, 40));
+    chk('条数对不上不说成文件坏了',
+        !/写坏/.test(L.mismText || ''), (L.mismText || '').slice(0, 40));
+    chk('空会话列表说成空文件',
+        /空文件/.test(L.zeroText || ''), (L.zeroText || '').slice(0, 40));
     chk('打开会话', L.opened === true && L.title !== '—', L.title);
     chk('会话统计已填', (L.stats || 0) >= 9, 'rows=' + L.stats);
     chk('会话含平均功率', /平均功率/.test(L.statsText || ''), '');
@@ -258,7 +263,15 @@ font:11px/1.55 monospace;white-space:pre-wrap">check 未运行</pre>
     document.getElementById('__check').textContent = r.join('\\n');
   }
 
-  setTimeout(run, 19000);
+  /* 等「恢复原厂」那轮也跑完再出报告；最多再等 20 秒，防止某一轮卡住时
+     整个 harness 什么都不输出（宁可报失败也不要没报告） */
+  setTimeout(function () {
+    var waited = 0;
+    var t = setInterval(function () {
+      waited += 200;
+      if (window.__restoreDone || waited >= 20000) { clearInterval(t); run(); }
+    }, 200);
+  }, 19000);
 })();
 </script>
 """
@@ -320,7 +333,7 @@ TABS = """<script>
                            emptyRows: -1, emptyText: '', emptyHint: '',
                            emptyChip: '', hint: '', thermalSame: false,
                            stallHint: '', stallChip: '', stallStartHidden: null,
-                           partText: '', mismText: '',
+                           partText: '', mismText: '', zeroText: '',
                            rawKept: false, rawLen: 0 };
 
   function txt(id) {
@@ -442,11 +455,12 @@ TABS = """<script>
     }, 400);
   }
 
-  /* 第五轮：「有 6 个日志文件，只解析出 0 条」这句提示本身。
-     这是用户在真机上看到的原话，必须先弄清楚是哪一种：
+  /* 第五轮：空文件 / 坏文件的说法。
+     用户在真机上看到过「有 6 个日志文件，只解析出 0 条」，必须先弄清楚是哪一种：
        a) 脚本被中断/超时，只吐了半截（没有 log_list_done 哨兵）
-       b) 文件确实读不出来（有哨兵，但条数还是对不上）
-     两种要给出不同的说法，不能只甩一句数字。 */
+       b) 有哨兵，并且点名了读不出来的文件（log_bad）
+       c) 有哨兵、没有坏文件，但某个会话一个采样点都没有（0 字节文件）
+     三种要给出不同的说法，不能只甩一句数字、更不能一律说「文件写坏了」。 */
   function phasePartial(logsBtn, liveBtn) {
     /* a) 没有哨兵 = 半截 */
     window.__setLogs('log_dir=/data/adb/dtbo_charge_unlock/chargelog\\n'
@@ -460,18 +474,36 @@ TABS = """<script>
         L.partText = (u && u.children[0]) ? txt2(u.children[0]) : '';
         if (liveBtn) liveBtn.click();
 
-        /* b) 有哨兵但条数对不上 = 文件读不出来 */
+        /* b) 有哨兵 + 点名了坏文件 = 读不出来 */
         window.__setLogs('log_dir=/data/adb/dtbo_charge_unlock/chargelog\\n'
           + 'log_interval=10\\nlog_dir_ok=1\\nlog_count=6\\nlog_current=\\n'
           + 'log_running=0\\nlog_beat=-1\\nlog_plugged=0\\nlog.list_count=0\\n'
-          + 'log_list_done=1\\n');
+          + 'log_list_done=1\\nlog_bad= 20251001-120000.log 20251002-120000.log\\n');
         setTimeout(function () {
           if (logsBtn) logsBtn.click();
           setTimeout(function () {
             var u2 = document.getElementById('logList');
             L.mismText = (u2 && u2.children[0]) ? txt2(u2.children[0]) : '';
             if (liveBtn) liveBtn.click();
-            L.done = true;
+
+            /* c) 会话在，但一个采样点都没有 = 空文件 */
+            window.__setLogs('log_dir=/data/adb/dtbo_charge_unlock/chargelog\\n'
+              + 'log_interval=10\\nlog_dir_ok=1\\nlog_count=1\\nlog_current=\\n'
+              + 'log_running=0\\nlog_beat=-1\\nlog_plugged=0\\n'
+              + 'log.list_count=1\\nlog_list_done=1\\n'
+              + 'log.0.name=20251001-120000.log\\nlog.0.start=1759300000\\n'
+              + 'log.0.end=0\\nlog.0.aborted=0\\nlog.0.samples=0\\n'
+              + 'log.0.cap0=0\\nlog.0.cap1=0\\nlog.0.temp_max=0\\n');
+            setTimeout(function () {
+              if (logsBtn) logsBtn.click();
+              setTimeout(function () {
+                var u3 = document.getElementById('logList');
+                var li = u3 && u3.children[0];
+                L.zeroText = li ? txt2(li) : '';
+                if (liveBtn) liveBtn.click();
+                L.done = true;
+              }, 900);
+            }, 400);
           }, 900);
         }, 400);
       }, 900);
@@ -534,9 +566,10 @@ RESTORE = """<script>
       window.__restoreDone = true;
     }, 1600);
   }
-  /* 等充电日志那轮（含空列表）彻底跑完再动，避免两个确认框互相踩 */
+  /* 等充电日志那轮（含空列表）和「运行修改」那轮都彻底跑完再动，
+     避免两个确认框同时挂着互相踩 */
   var t = setInterval(function () {
-    if (window.__log && window.__log.done) { clearInterval(t); go(); }
+    if (window.__log && window.__log.done && window.__applyDone) { clearInterval(t); go(); }
   }, 120);
 })();
 </script>

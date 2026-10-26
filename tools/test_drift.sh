@@ -80,12 +80,14 @@ while [ "$_i" -lt "$N_ENTRY" ]; do
 	"$DTC" -I dtb -O dts -o "$WORK/b.$_i.dts" "$WORK/dtb.$_i" 2>/dev/null || {
 		bad "反编译 dtb.$_i 失败"; exit 1; }
 	# 三种条目分开看：带 jeita 的、只带 charger_thermal 的、一个充电节点都没有的
-	if grep -q 'mca_charger_thermal:' "$WORK/b.$_i.dts"; then
+	# 注意：反编译出来的 dts 有没有 label（`名字: 名字 {`）取决于 dtb 里有没有 __symbols__，
+	# 不同版本的 dtc 行为不一样。这里一律按「节点名 + 花括号」认，别依赖冒号。
+	if grep -qE '(^|[[:space:]])mca_charger_thermal[[:space:]]*\{' "$WORK/b.$_i.dts"; then
 		echo "yes" > "$WORK/th.$_i"
 	else
 		echo "no" > "$WORK/th.$_i"
 	fi
-	if grep -q 'mca_buckchg_jeita:' "$WORK/b.$_i.dts"; then
+	if grep -qE '(^|[[:space:]])mca_buckchg_jeita[[:space:]]*\{' "$WORK/b.$_i.dts"; then
 		echo "jeita" > "$WORK/kind.$_i"
 	elif [ "$(cat "$WORK/th.$_i")" = "yes" ]; then
 		echo "thermal" > "$WORK/kind.$_i"
@@ -154,7 +156,7 @@ while [ "$_i" -lt "$N_ENTRY" ]; do
 	esac
 
 	if [ "$(cat "$SANDBOX/before/th.$_i")" = "yes" ]; then
-		if sed -n '/mca_charger_thermal: mca_charger_thermal {/,/};/p' "$WORK/a.$_i.dts" \
+		if sed -n '/mca_charger_thermal[[:space:]]*{/,/};/p' "$WORK/a.$_i.dts" \
 			| grep -q 'status = "disabled";'; then
 			ok "条目 $_i: mca_charger_thermal = disabled"
 		else

@@ -14,6 +14,12 @@ SB="$2"
 	exit 2
 }
 
+# 沙盒路径必须是个目录名，不能是文件。
+# （曾经误把 dtc.exe 的路径当沙盒传进来，rm -rf 直接把编译器删了）
+case "$SB" in
+*.[Ee][Xx][Ee]|*.[Dd][Ll][Ll]|*.[Ii][Mm][Gg]|*.[Dd][Tt][Bb]|*.[Dd][Tt][Ss]|*.[Zz][Ii][Pp])
+	echo "沙盒路径不能是文件: $SB" >&2; exit 2 ;;
+esac
 rm -rf "$SB"
 mkdir -p "$SB" || exit 1
 
