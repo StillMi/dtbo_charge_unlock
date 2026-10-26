@@ -799,13 +799,22 @@
     var ul = $('logList');
     ul.innerHTML = '';
 
+    /* 只拿到文件名那一级兜底：列表有内容，但内容没解析出来，得在上面说一句，
+       否则用户会以为那些行就是完整的记录。 */
+    if (logNamesOnly && logListErr) setText('logHintText', logListErr);
+
     if (!logList.length) {
       var li0 = document.createElement('li');
       li0.className = 'empty';
       /* 把目录写出来：真机上读不到日志时，用户至少能自己去文件管理器看一眼，
-         而不是对着「还没有记录」干瞪眼。 */
+         而不是对着「还没有记录」干瞪眼。诊断那一串是给「文件明明在却列不出来」
+         用的 —— 它直接说明脚本看到几个文件、目录里有几个条目、第一个叫什么。 */
       li0.textContent = logListErr || ('还没有记录。插上充电器就会开始记。'
-        + (logDirPath ? '（目录：' + logDirPath + '）' : ''));
+        + (logDirPath ? '（目录：' + logDirPath + '）' : '')
+        + (logAny !== null && logAny > 0
+            ? ' 目录里有 ' + logAny + ' 个条目，第一个是 ' + (logFirst || '?') + '。'
+            : '')
+        + (logScan ? ' 诊断：' + logScan : ''));
       ul.appendChild(li0);
       return;
     }
@@ -863,6 +872,15 @@
   }
 
   function loadLogs(silent) {
+    return loadLogsRun(silent, 0);
+  }
+
+  /* mode 决定这次让 monitor.sh 怎么列：
+       0 = 正常（awk 优先，条数对不上时脚本自己会退纯 shell）
+       1 = 强制纯 shell（MONITOR_NO_AWK=1），第一轮一条都没读出来时试一次
+       2 = 只要文件名（--names），什么都不解析，保证列表不是空的
+     只在真读不出来时逐级往下退，正常情况下永远走 0。 */
+  function loadLogsRun(silent, mode) {
     var ul = $('logList');
     if (!silent) {
       if (ul) ul.innerHTML = '<li class="empty">读取中…</li>';
@@ -872,7 +890,9 @@
 
     /* 刷新时不要把列表清空重画：对比一下指纹，没变就一个节点都不动，
        变了再整块重画（列表最多 40 行，重建代价可以接受，但没必要每 5 秒来一次）。 */
-    return exec('sh ' + moduleDir() + '/monitor.sh --logs', 30000)
+    var cmd = (mode === 1 ? 'MONITOR_NO_AWK=1 ' : '')
+            + 'sh ' + moduleDir() + '/monitor.sh ' + (mode === 2 ? '--names' : '--logs');
+    return exec(cmd, 30000)
       .then(function (res) {
         /* 采集脚本本身失败时必须说出来。以前不看 errno，stdout 空着就当成
            「0 个会话」，页面于是永远停在「读取中…」，谁也看不出是坏了。 */
@@ -882,10 +902,23 @@
         var k = parseKV(res.stdout || '');
         var n = num(k['log.list_count']) || 0;
 
+        /* 明明有日志文件却一条都没读出来：awk 在个别设备上行为不一样
+           （比如不认 FILENAME）就会这样。先换纯 shell 那条路再读一次，
+           还不行就退到「只要文件名」。每一级只试一次，不会打转。
+           只在「脚本确实跑完了（有哨兵）、也没点名坏文件」时才降级 ——
+           被中断的那种要先让用户看见「被中断，刷新一次」，不能直接换成
+           一个只有文件名的列表，那样等于把问题藏起来。 */
+        if (mode < 2 && n === 0 && (num(k['log_count']) || 0) > 0
+            && (k['log_list_done'] || '').trim() === '1'
+            && !(k['log_bad'] || '').trim()) {
+          return loadLogsRun(silent, mode + 1);
+        }
+
         var next = [];
         for (var i = 0; i < n; i++) {
-          var nm = k['log.' + i + '.name'];
-          if (!nm) continue;
+          /* 名字为空也要占一行。以前直接 continue，于是「脚本说有 6 条、
+             页面只画出 0 行」，看起来像日志全丢了，实际是这一条被丢掉。 */
+          var nm = k['log.' + i + '.name'] || ('会话 ' + (i + 1) + '（文件名读不出来）');
           var pmw = num(k['log.' + i + '.pmax_mw']);
           next.push({
             name: nm,
@@ -902,6 +935,10 @@
 
         renderLogState(k);
         logDirPath = (k['log_dir'] || '').trim();
+        logScan = (k['log_scan'] || '').trim();
+        logAny = num(k['log_any']);
+        logFirst = (k['log_first'] || '').trim();
+        logNamesOnly = (mode === 2);
 
         /* 指纹比对：静默刷新时没变就一个节点都不动。但非静默（刚把列表清成
            「读取中…」）必须重画，否则会把自己刚写的占位留在屏幕上；
@@ -925,7 +962,15 @@
         var done = (k['log_list_done'] || '').trim() === '1';
         var why = (k['log_err'] || '').trim();
         var bad = (k['log_bad'] || '').trim();
-        if (!done && files !== null && files > 0) {
+        /* 脚本自己报的扫描过程：文件数 / 有没有 awk / 第一轮解析出几条 / 最终几条。
+           条数对不上时把它一起显示出来，省得再靠猜。 */
+        var scan = (k['log_scan'] || '').trim();
+        if (logNamesOnly) {
+          /* 连纯 shell 都解析不出内容，只能退到文件名。至少让用户看见「有哪几次
+             充电」，点进去还能单独读那一个文件 —— 比一个空列表强。 */
+          logListErr = '只读到了文件名，内容解析不出来。点进某一次记录还能单独读它。'
+                     + (scan ? '诊断：' + scan : '');
+        } else if (!done && files !== null && files > 0) {
           logListErr = '读日志列表时被中断了（只拿到 ' + next.length + ' 条）。'
                      + '日志文件多的时候第一次会慢一点。' + (why ? '（' + why + '）' : '');
         } else if (bad) {
@@ -933,7 +978,8 @@
                      + '。删掉它们就不会再报，剩下的照常显示。';
         } else if (expect !== null && expect > next.length) {
           logListErr = '有 ' + files + ' 个日志文件，只解析出 ' + next.length + ' 条。'
-                     + (why ? '（' + why + '）' : '（列表没读完，刷新一次试试）');
+                     + (why ? '（' + why + '）' : '（列表没读完，刷新一次试试）')
+                     + (scan ? '诊断：文件/awk/第一轮/最终 = ' + scan : '');
         }
         renderLogList();
       })
@@ -955,6 +1001,13 @@
   var logsDrawn = false;
   var logListErr = '';
   var logDirPath = '';
+  /* 脚本报回来的诊断：扫描过程、目录里的条目数、第一个条目的名字。
+     列表为空时一起显示出来，出问题不用再猜是路径不对还是扫描坏了。 */
+  var logScan = '';
+  var logAny = null;
+  var logFirst = '';
+  /* true 表示这一次的列表是「只拿到文件名」的兜底结果，内容没解析出来。 */
+  var logNamesOnly = false;
 
   function listSig(list) {
     var a = [];

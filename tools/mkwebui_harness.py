@@ -18,6 +18,8 @@ STUB = """<script>
   var BASE = %s;
   var LOGS = %s;
   var SESS = %s;
+  /* 兜底「只拿文件名」那一级的假数据，默认跟 LOGS 一样（正常情况不会走到） */
+  var NAMES = LOGS;
   var n = 0;
 
   function variant(txt, i) {
@@ -31,8 +33,9 @@ STUB = """<script>
               .replace(/^voltage_now=.*$/m, 'voltage_now=' + vol);
   }
 
-  /* 按命令分派：列表 / 单个会话 / 实时采集 */
+  /* 按命令分派：列表 / 只要文件名 / 单个会话 / 实时采集 */
   function fixture(cmd, i) {
+    if (cmd.indexOf('--names') >= 0) return NAMES;
     if (cmd.indexOf('--logs') >= 0) return LOGS;
     if (cmd.indexOf('--log ') >= 0) return SESS;
     return variant(BASE, i);
@@ -40,6 +43,7 @@ STUB = """<script>
 
   /* 断言「空日志列表不能卡在读取中」时要把 LOGS 换成空的，所以留个口子 */
   window.__setLogs = function (v) { LOGS = v; };
+  window.__setNames = function (v) { NAMES = v; };
 
   window.__errors = [];
   window.__calls = [];
@@ -225,6 +229,11 @@ font:11px/1.55 monospace;white-space:pre-wrap">check 未运行</pre>
         !/写坏/.test(L.mismText || ''), (L.mismText || '').slice(0, 40));
     chk('空会话列表说成空文件',
         /空文件/.test(L.zeroText || ''), (L.zeroText || '').slice(0, 40));
+    /* 真机上「跑完了、没坏文件、却一条都解析不出来」时要退到只列文件名，
+       不能给一个空列表让用户以为日志全丢了 */
+    chk('解析不出内容时仍列出文件名', (L.namesRows || 0) >= 2, 'rows=' + L.namesRows);
+    chk('只读到文件名时说清楚了',
+        /文件名/.test(L.namesHint || ''), (L.namesHint || '').slice(0, 40));
     chk('打开会话', L.opened === true && L.title !== '—', L.title);
     chk('会话统计已填', (L.stats || 0) >= 9, 'rows=' + L.stats);
     chk('会话含平均功率', /平均功率/.test(L.statsText || ''), '');
@@ -334,6 +343,7 @@ TABS = """<script>
                            emptyChip: '', hint: '', thermalSame: false,
                            stallHint: '', stallChip: '', stallStartHidden: null,
                            partText: '', mismText: '', zeroText: '',
+                           namesRows: -1, namesText: '', namesHint: '',
                            rawKept: false, rawLen: 0 };
 
   function txt(id) {
@@ -436,10 +446,18 @@ TABS = """<script>
      用户看到的就是「一直卡在记录中不刷新」，页面必须说清楚是卡住，
      而不是继续显示「正在记录」。 */
   function phaseStalled(logsBtn, liveBtn) {
+    /* 进程卡住时，之前记好的会话照样读得出来 —— 不能因为进程死了就把
+       列表清空，那会让人以为历史也没了。 */
     window.__setLogs('log_dir=/data/adb/dtbo_charge_unlock/chargelog\\n'
-      + 'log_interval=10\\nlog_dir_ok=1\\nlog_count=3\\nlog_current=\\n'
-      + 'log_running=0\\nlog_beat=600\\nlog_plugged=0\\nlog.list_count=0\\n'
-      + 'log_list_done=1\\n');
+      + 'log_interval=10\\nlog_dir_ok=1\\nlog_count=2\\nlog_current=\\n'
+      + 'log_running=0\\nlog_beat=600\\nlog_plugged=0\\n'
+      + 'log.list_count=2\\nlog_list_done=1\\n'
+      + 'log.0.name=20251002-120000.log\\nlog.0.start=1759300000\\n'
+      + 'log.0.end=1759303600\\nlog.0.aborted=0\\nlog.0.samples=30\\n'
+      + 'log.0.cap0=20\\nlog.0.cap1=70\\nlog.0.temp_max=352\\n'
+      + 'log.1.name=20251001-120000.log\\nlog.1.start=1759200000\\n'
+      + 'log.1.end=1759203600\\nlog.1.aborted=0\\nlog.1.samples=30\\n'
+      + 'log.1.cap0=30\\nlog.1.cap1=80\\nlog.1.temp_max=350\\n');
     setTimeout(function () {
       if (logsBtn) logsBtn.click();
       setTimeout(function () {
@@ -501,7 +519,31 @@ TABS = """<script>
                 var li = u3 && u3.children[0];
                 L.zeroText = li ? txt2(li) : '';
                 if (liveBtn) liveBtn.click();
-                L.done = true;
+
+                /* d) 跑完了、没有坏文件、却一条都解析不出来
+                      → 退到「只要文件名」，列表不能是空的 */
+                window.__setLogs('log_dir=/data/adb/dtbo_charge_unlock/chargelog\\n'
+                  + 'log_interval=10\\nlog_dir_ok=1\\nlog_count=6\\nlog_current=\\n'
+                  + 'log_running=0\\nlog_beat=-1\\nlog_plugged=0\\n'
+                  + 'log.list_count=0\\nlog_list_done=1\\nlog_scan=6/1/0/0\\n');
+                window.__setNames('log_dir=/data/adb/dtbo_charge_unlock/chargelog\\n'
+                  + 'log_interval=10\\nlog_dir_ok=1\\nlog_count=6\\nlog_current=\\n'
+                  + 'log_running=0\\nlog_beat=-1\\nlog_plugged=0\\n'
+                  + 'log.0.name=20251002-120000.log\\nlog.0.samples=0\\n'
+                  + 'log.1.name=20251001-120000.log\\nlog.1.samples=0\\n'
+                  + 'log.list_count=2\\nlog_list_done=1\\n');
+                setTimeout(function () {
+                  if (logsBtn) logsBtn.click();
+                  setTimeout(function () {
+                    var u4 = document.getElementById('logList');
+                    L.namesRows = u4 ? u4.children.length : -1;
+                    L.namesText = (u4 && u4.children[0]) ? txt2(u4.children[0]) : '';
+                    var h4 = document.getElementById('logHintText');
+                    L.namesHint = h4 ? txt2(h4) : '';
+                    if (liveBtn) liveBtn.click();
+                    L.done = true;
+                  }, 900);
+                }, 400);
               }, 900);
             }, 400);
           }, 900);

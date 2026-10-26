@@ -385,9 +385,10 @@ _v=$(grep '^log.0.pmax_mw=' "$SB/awk_no.txt" | cut -d= -f2-)
 [ "$_v" = "8000" ] && ok "兜底 pmax_mw 8000" || bad "兜底 pmax_mw [$_v]"
 _v=$(grep '^log.0.samples=' "$SB/awk_no.txt" | cut -d= -f2-)
 [ "$_v" = "2" ] && ok "兜底 samples 2" || bad "兜底 samples [$_v]"
-# 两种实现的结果必须一模一样（除 log_err）
-grep -v '^log_err=' "$SB/awk_ok.txt" > "$SB/a1.txt"
-grep -v '^log_err=' "$SB/awk_no.txt" > "$SB/a2.txt"
+# 两种实现的结果必须一模一样（log_err / log_dbg / log_scan 是诊断字段，
+# log_scan 里本来就带着「有没有走 awk」，不该参与比对）
+grep -v -e '^log_err=' -e '^log_dbg=' -e '^log_scan=' "$SB/awk_ok.txt" > "$SB/a1.txt"
+grep -v -e '^log_err=' -e '^log_dbg=' -e '^log_scan=' "$SB/awk_no.txt" > "$SB/a2.txt"
 if cmp -s "$SB/a1.txt" "$SB/a2.txt"; then
 	ok "兜底结果与 awk 逐行一致"
 else
@@ -488,6 +489,31 @@ _v=$(grep '^log.list_count=' "$SB/allempty.txt" | cut -d= -f2-)
 [ "$_v" = "6" ] && ok "6 个空文件也列 6 条" || bad "list_count [$_v] 应为 6"
 _v=$(grep '^log_bad=' "$SB/allempty.txt" | cut -d= -f2-)
 [ -z "$_v" ] && ok "空文件不算「读不出来」" || bad "log_bad [$_v] 不该点名空文件"
+
+echo "== 只要文件名的兜底（--names） =="
+# 页面最后一级兜底：什么都不解析，只把文件名列出来。
+# 它必须永远成功 —— 用户至少要知道「有哪几次充电」，能点进去单独读。
+rm -rf "$LOGDIR"
+mkdir -p "$LOGDIR"
+for _d in 01 02 03; do
+	: > "$LOGDIR/202510${_d}-100000.log"
+done
+# 故意塞一个非日志内容，证明 --names 完全不看内容
+printf 'this is not a log at all\n' > "$LOGDIR/20251004-100000.log"
+CHARGELOG_DIR="$LOGDIR" MODDIR="$MOD" \
+	sh "$MODDIR_SRC/monitor.sh" --names > "$SB/names.txt" 2>&1
+_v=$(grep '^log.list_count=' "$SB/names.txt" | cut -d= -f2-)
+[ "$_v" = "4" ] && ok "--names 列出 4 个文件" || bad "--names list_count [$_v] 应为 4"
+_v=$(grep -c '^log\.[0-9]*\.name=' "$SB/names.txt")
+[ "$_v" = "4" ] && ok "--names 4 个名字都在" || bad "--names 名字 [$_v] 个应为 4"
+_v=$(grep '^log.0.name=' "$SB/names.txt" | cut -d= -f2-)
+[ "$_v" = "20251004-100000.log" ] && ok "--names 最新的排第一（$_v）" \
+	|| bad "--names 第一条 [$_v] 应为 20251004-100000.log"
+_v=$(grep '^log_list_done=' "$SB/names.txt" | cut -d= -f2-)
+[ "$_v" = "1" ] && ok "--names 也有哨兵" || bad "--names log_list_done [$_v]"
+# 状态区也要在，否则退到兜底时页面上的「记录中/未在记录」会变空
+_v=$(grep -c '^log_dir_ok=' "$SB/names.txt")
+[ "$_v" = "1" ] && ok "--names 也带状态区" || bad "--names 少了 log_dir_ok"
 
 echo ""
 if [ "$fail" -eq 0 ]; then

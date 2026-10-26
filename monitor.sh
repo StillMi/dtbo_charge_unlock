@@ -44,6 +44,8 @@ emit() { printf '%s=%s\n' "$1" "$2"; }
 # 行尾 CR（配置/状态文件可能在 Windows 上被编辑过）。取一次，之后用参数展开去掉，
 # 免得每次比较都 fork 一个 tr。
 _CR=$(printf '\r')
+_NL='
+'
 
 # 把文件第一行读进 $_RV。不存在/不可读就留空。
 rv() {
@@ -102,6 +104,20 @@ log_state() {
 	done
 	emit log_count "$_c"
 
+	# 诊断用：目录里一共有几个条目、第一个叫什么。
+	# 「明明有日志却一条都列不出来」时，这两行能立刻分清是
+	# ① 目录路径不对（条目数 0）、② 文件在但扩展名不是 .log、
+	# ③ 文件在、也匹配 *.log，那就是扫描本身的问题。
+	_any=0
+	_first=""
+	for _x in "$LOGDIR"/*; do
+		[ -e "$_x" ] || continue
+		_any=$((_any + 1))
+		[ -n "$_first" ] || _first=${_x##*/}
+	done
+	emit log_any "$_any"
+	emit log_first "$_first"
+
 	rv "$LOGDIR/.current"
 	emit log_current "$_RV"
 
@@ -159,15 +175,60 @@ log_state() {
 # 采样行格式（v2，11 列；v1 只有前 7 列）：
 #   0 epoch  1 cap  2 temp_raw  3 current_now  4 voltage_now  5 charge_counter
 #   6 status 7 power_now 8 usb_vnow 9 usb_imax 10 chg_temp_raw
+# 把「每行 13 段、用 | 分隔」的扫描结果拆开并 emit。
+# 单独放在函数外面，是因为 list_sessions 里要跑两轮（先一次 awk 扫完，
+# 条数不对再逐文件重来），拆段逻辑必须只有一份，两轮格式才不会走样。
+_consume_rows() {
+	while IFS= read -r _l; do
+		case "$_l" in
+			'') continue ;;
+			*'|'*) ;;
+			*) _err="$_l"; continue ;;
+		esac
+		# 拆 13 段
+		_r="$_l"
+		_nm=${_r%%|*}; _r=${_r#*|}
+		_st=${_r%%|*}; _r=${_r#*|}
+		_en=${_r%%|*}; _r=${_r#*|}
+		_ab=${_r%%|*}; _r=${_r#*|}
+		_cn=${_r%%|*}; _r=${_r#*|}
+		_p0=${_r%%|*}; _r=${_r#*|}
+		_p1=${_r%%|*}; _r=${_r#*|}
+		_tm=${_r%%|*}; _r=${_r#*|}
+		_im=${_r%%|*}; _r=${_r#*|}
+		_vm=${_r%%|*}; _r=${_r#*|}
+		_pm=${_r%%|*}; _r=${_r#*|}
+		_cf=${_r%%|*}; _r=${_r#*|}
+		_cl=${_r}
+
+		# 名字为空的行不能用：页面靠 log.<i>.name 判断这一条存在，
+		# 空名字会被跳过，于是「解析出的条数」又和「文件数」对不上。
+		[ -n "$_nm" ] || continue
+
+		emit "log.$_i.name"     "$_nm"
+		emit "log.$_i.start"    "$_st"
+		emit "log.$_i.end"      "$_en"
+		emit "log.$_i.aborted"  "$_ab"
+		emit "log.$_i.samples"  "$_cn"
+		emit "log.$_i.cap0"     "$_p0"
+		emit "log.$_i.cap1"     "$_p1"
+		emit "log.$_i.temp_max" "$_tm"
+		emit "log.$_i.cur_max"  "$_im"
+		emit "log.$_i.volt_max" "$_vm"
+		emit "log.$_i.pmax_mw"  "$_pm"
+		emit "log.$_i.cnt0"     "$_cf"
+		emit "log.$_i.cnt1"     "$_cl"
+		_i=$((_i + 1))
+	done <<LOGEOF
+$1
+LOGEOF
+}
+
 list_sessions() {
 	log_state
 
-	# 收集会话文件，最新的排前面。
-	# 以前用 `ls -1t`，但 ls 是外部命令：PATH 里没有 ls、或者 ls 报错时它什么都不
-	# 输出，于是「明明有 6 个日志文件却一条都列不出来」，页面只能报一句看不懂的
-	# 「有 6 个日志文件，只解析出 0 条」。日志名是 YYYYmmdd-HHMMSS.log，字典序
-	# 就是时间序，所以直接用 shell 的 glob（升序）反向插入 —— 不 fork、不依赖
-	# 外部命令，结果和 `ls -1t` 一致（都是最新的在前）。
+	# 收集会话文件，最新的排前面。日志名是 YYYYmmdd-HHMMSS.log，字典序就是
+	# 时间序，所以用 shell glob（升序）反向插入 —— 不 fork、不依赖外部 ls。
 	_all=""
 	for _f in "$LOGDIR"/*.log; do
 		[ -f "$_f" ] || continue
@@ -182,25 +243,33 @@ list_sessions() {
 		_files="$_files $_f"
 		_ln=$((_ln + 1))
 		# 顺手记一下有没有 0 字节文件：awk 的 FNR == 1 只在「文件第一行」
-		# 触发，空文件一行都没有，会被安静地漏掉（log_count 数到了、列表里
-		# 没有），页面就谎报「文件可能写坏了」。有空文件就直接走纯 shell。
+		# 触发，空文件一行都没有，会被安静地漏掉。有空文件就直接走逐文件那条。
 		[ -s "$_f" ] || _z=$((_z + 1))
 		[ "$_ln" -ge 40 ] && break
 	done
 
+	# 文件数不用在这里再 emit 一次：log_state 已经数过了（同一个 glob 判据）。
+	# 重复 emit 会让页面把「6」和「6」拼成「66」，反而更难排查。
+
 	if [ "$_ln" -eq 0 ]; then
 		emit log.list_count 0
+		emit log_scan "0/0/0/0"
 		emit log_list_done 1
 		return 0
 	fi
 
-	# 先试 awk（一次 fork 扫完，快）。注意两件事：
-	#   1. 以前把 stderr 直接丢进 /dev/null —— 万一设备上没有 awk，或者 awk
-	#      崩了，这里会安静地吐出一个空列表，页面就成了「读取不到历史日志」，
-	#      而且完全看不出原因。现在把 stderr 一起收回来，非数据行当成 log_err。
-	#   2. 输出先收进变量再在 shell 里拆，不再用管道 —— 管道里的 {} 是子 shell。
+	_have_awk=0
+	if command -v awk >/dev/null 2>&1 && [ "${MONITOR_NO_AWK:-0}" != "1" ]; then
+		_have_awk=1
+	fi
+
+	# 第一轮：一次 awk 扫完全部文件（一次 fork，快）。
+	# 输出先收进变量再在 shell 里拆，不用管道 —— 管道里的 while 是子 shell，
+	# 统计结果传不出来。stderr 也收回来，非数据行当成 log_err。
+	# 有 0 字节文件时直接跳过这一轮：awk 认不出空文件，扫了也白扫。
 	_awk_out=""
-	if [ "$_z" -eq 0 ] && command -v awk >/dev/null 2>&1 && [ "${MONITOR_NO_AWK:-0}" != "1" ]; then
+	_awk_rc=0
+	if [ "$_have_awk" = "1" ] && [ "$_z" -eq 0 ]; then
 	# shellcheck disable=SC2086
 	_awk_out=$(awk -F, '
 		function reset() {
@@ -240,134 +309,159 @@ list_sessions() {
 		}
 		END { flush() }
 	' $_files 2>&1)
+	_awk_rc=$?
 	fi
 
 	_i=0
 	_err=""
-	# 用 here-doc 读，不用管道：管道里的 while 是子 shell，统计结果传不出来，
-	# 而且不用 for 展开（避免数据里的字符被当成通配符）。
-	while IFS= read -r _l; do
-		case "$_l" in
-			'') continue ;;
-			*'|'*) ;;
-			*) _err="$_l"; continue ;;
-		esac
-		# 拆 13 段
-		_r="$_l"
-		_nm=${_r%%|*}; _r=${_r#*|}
-		_st=${_r%%|*}; _r=${_r#*|}
-		_en=${_r%%|*}; _r=${_r#*|}
-		_ab=${_r%%|*}; _r=${_r#*|}
-		_cn=${_r%%|*}; _r=${_r#*|}
-		_p0=${_r%%|*}; _r=${_r#*|}
-		_p1=${_r%%|*}; _r=${_r#*|}
-		_tm=${_r%%|*}; _r=${_r#*|}
-		_im=${_r%%|*}; _r=${_r#*|}
-		_vm=${_r%%|*}; _r=${_r#*|}
-		_pm=${_r%%|*}; _r=${_r#*|}
-		_cf=${_r%%|*}; _r=${_r#*|}
-		_cl=${_r}
+	_consume_rows "$_awk_out"
+	_r1=$_i
 
-		emit "log.$_i.name"     "$_nm"
-		emit "log.$_i.start"    "$_st"
-		emit "log.$_i.end"      "$_en"
-		emit "log.$_i.aborted"  "$_ab"
-		emit "log.$_i.samples"  "$_cn"
-		emit "log.$_i.cap0"     "$_p0"
-		emit "log.$_i.cap1"     "$_p1"
-		emit "log.$_i.temp_max" "$_tm"
-		emit "log.$_i.cur_max"  "$_im"
-		emit "log.$_i.volt_max" "$_vm"
-		emit "log.$_i.pmax_mw"  "$_pm"
-		emit "log.$_i.cnt0"     "$_cf"
-		emit "log.$_i.cnt1"     "$_cl"
-		_i=$((_i + 1))
-	done <<LOGEOF
-$_awk_out
-LOGEOF
+	# 诊断：把第一轮看到的东西留一点下来。真机上「有 6 个文件、一条都解析
+	# 不出来」时，光看条数是分不清「awk 没输出」「输出了但格式不对」还是
+	# 「文件名取空了」的 —— 这一小段能直接看出来。
+	# 只留第一行（多行会把 kv 输出撑坏），并且只截前 120 个字符。
+	_dbg="rc=$_awk_rc z=$_z n=$_ln r1=$_r1"
+	if [ -n "$_awk_out" ]; then
+		_dbg_first=${_awk_out%%"$_NL"*}
+		_dbg="$_dbg | $_dbg_first"
+	else
+		_dbg="$_dbg | (awk 无输出)"
+	fi
 
-	# 两个触发条件：
-	#   1. 一条都没解析出来（awk 没装 / 崩了 / 输出看不懂）；
-	#   2. 解析出来的条数比文件数少 —— 这个最坑。awk 的 FNR == 1 只在
-	#      「文件的第一行」触发，0 字节文件一行都没有，于是它被安静地跳过：
-	#      log_count=6、log.list_count=5，页面就报「有 6 个日志文件，只解析
-	#      出 5 条（文件可能写坏了）」—— 其实文件没坏，是扫描漏了它。
-	# 纯 shell 那条路按文件循环，一个文件必出一条，条数一定对得上。
-	if [ "$_i" -lt "$_ln" ]; then
+	# 条数必须等于文件数。对不上就说明有文件被漏掉了（0 字节文件 awk 一行
+	# 都读不到、awk 行为不一致、名字取空……）。这时改成「一个文件一次」，
+	# 每次读完无条件吐一条，条数必然 1:1 —— 页面上「只解析出 N 条」从此
+	# 只会在真的出问题时才出现，而不是扫描自己数错。
+	if [ "$_i" -ne "$_ln" ]; then
 		_i=0
-		for _f in $_files; do
-			_s_st=""; _s_en=""; _s_ab=0; _s_cn=0
-			_s_c0=""; _s_c1=""; _s_tm=0; _s_im=0; _s_vm=0; _s_pm=0
-			_s_cf=""; _s_cl=""
-			# _t 必须每个文件先清空：`|| [ -n "$_t" ]` 是给「最后一行没有换行」
-			# 用的，但 _t 留着上一个文件的值时，空文件会被多算一个采样点。
-			_t=""
-			while IFS=, read -r _t _cap _tmp _cur _vol _cnt _sts _pow _uv _ui _ct \
-				|| [ -n "$_t" ]; do
-				case "$_t" in
-					'#start='*)   _s_st=${_t#*=}; continue ;;
-					'#end='*)     _s_en=${_t#*=}; continue ;;
-					'#aborted=1') _s_ab=1; continue ;;
-					'#'*)         continue ;;
-					''|*[!0-9]*)  continue ;;
-				esac
-				_s_cn=$((_s_cn + 1))
-				if [ "$_s_cn" -eq 1 ]; then _s_c0="$_cap"; _s_cf="$_cnt"; fi
-				_s_c1="$_cap"
-				_s_cl="$_cnt"
-				case "$_tmp" in
-					''|*[!0-9-]*) ;;
-					*) [ "$_tmp" -gt "$_s_tm" ] && _s_tm="$_tmp" ;;
-				esac
-				_a="$_cur"
-				case "$_a" in -*) _a=${_a#-} ;; esac
-				case "$_a" in
-					''|*[!0-9]*) _a=0 ;;
-				esac
-				[ "$_a" -gt "$_s_im" ] && _s_im="$_a"
-				case "$_vol" in
-					''|*[!0-9]*) _v=0 ;;
-					*) _v="$_vol" ;;
-				esac
-				[ "$_v" -gt "$_s_vm" ] && _s_vm="$_v"
-				case "$_pow" in
-					''|*[!0-9]*) _p=0 ;;
-					*) _p=$((_pow / 1000)) ;;
-				esac
-				if [ "$_p" -le 0 ] && [ "$_v" -gt 0 ] && [ "$_a" -gt 0 ]; then
-					_p=$(( (_a / 1000) * (_v / 1000) / 1000 ))
-				fi
-				[ "$_p" -gt "$_s_pm" ] && _s_pm="$_p"
-			done < "$_f"
+		_err=""
+		if [ "$_have_awk" = "1" ]; then
+			_awk_out=""
+			# shellcheck disable=SC2086
+			for _f in $_files; do
+				_awk_out="$_awk_out$(awk -F, -v nm="${_f##*/}" '
+					function out() {
+						printf "%s|%s|%s|%d|%d|%s|%s|%d|%d|%d|%d|%s|%s\n", \
+							nm, st, en, ab, cnt, c0, c1, tm, im, vm, pm, cf, cl
+					}
+					BEGIN {
+						st = ""; en = ""; ab = 0; cnt = 0
+						c0 = ""; c1 = ""; cf = ""; cl = ""
+						tm = 0; im = 0; vm = 0; pm = 0
+					}
+					/^#start=/   { st = $0; sub(/^#start=/, "", st); next }
+					/^#end=/     { en = $0; sub(/^#end=/, "", en);   next }
+					/^#aborted=1/ { ab = 1; next }
+					/^#/         { next }
+					NF < 2       { next }
+					{
+						cnt++
+						if (cnt == 1) { c0 = $2; cf = $6 }
+						c1 = $2
+						cl = $6
+						if ($3 + 0 > tm) tm = $3 + 0
+						i = $4 + 0; if (i < 0) i = -i
+						v = $5 + 0
+						if (i > im) im = i
+						if (v > vm) vm = v
+						p = 0
+						if (NF >= 8 && $8 != "") p = ($8 + 0) / 1000
+						if (p <= 0 && v > 0 && i > 0) p = (i / 1000) * (v / 1000) / 1000
+						if (p > pm) pm = p
+					}
+					END { out() }
+				' "$_f" 2>/dev/null)
+"
+			done
+			_consume_rows "$_awk_out"
+		fi
 
-			emit "log.$_i.name"     "${_f##*/}"
-			emit "log.$_i.start"    "$_s_st"
-			emit "log.$_i.end"      "$_s_en"
-			emit "log.$_i.aborted"  "$_s_ab"
-			emit "log.$_i.samples"  "$_s_cn"
-			emit "log.$_i.cap0"     "$_s_c0"
-			emit "log.$_i.cap1"     "$_s_c1"
-			emit "log.$_i.temp_max" "$_s_tm"
-			emit "log.$_i.cur_max"  "$_s_im"
-			emit "log.$_i.volt_max" "$_s_vm"
-			emit "log.$_i.pmax_mw"  "$_s_pm"
-			emit "log.$_i.cnt0"     "$_s_cf"
-			emit "log.$_i.cnt1"     "$_s_cl"
-			_i=$((_i + 1))
-		done
+		# 还是没有（设备上没有 awk，或者 awk 根本不能用）→ 纯 shell 逐文件。
+		# 这条路按文件循环，一个文件必出一条，条数一定对得上。
+		if [ "$_i" -ne "$_ln" ]; then
+			_i=0
+			_err=""
+			# shellcheck disable=SC2086
+			for _f in $_files; do
+				_s_st=""; _s_en=""; _s_ab=0; _s_cn=0
+				_s_c0=""; _s_c1=""; _s_tm=0; _s_im=0; _s_vm=0; _s_pm=0
+				_s_cf=""; _s_cl=""
+				# _t 必须每个文件先清空：`|| [ -n "$_t" ]` 是给「最后一行没有
+				# 换行」用的，但 _t 留着上一个文件的值时，空文件会被多算一个点。
+				_t=""
+				while IFS=, read -r _t _cap _tmp _cur _vol _cnt _sts _pow _uv _ui _ct \
+					|| [ -n "$_t" ]; do
+					case "$_t" in
+						'#start='*)   _s_st=${_t#*=}; continue ;;
+						'#end='*)     _s_en=${_t#*=}; continue ;;
+						'#aborted=1') _s_ab=1; continue ;;
+						'#'*)         continue ;;
+						''|*[!0-9]*)  continue ;;
+					esac
+					_s_cn=$((_s_cn + 1))
+					if [ "$_s_cn" -eq 1 ]; then _s_c0="$_cap"; _s_cf="$_cnt"; fi
+					_s_c1="$_cap"
+					_s_cl="$_cnt"
+					case "$_tmp" in
+						''|*[!0-9-]*) ;;
+						*) [ "$_tmp" -gt "$_s_tm" ] && _s_tm="$_tmp" ;;
+					esac
+					_a="$_cur"
+					case "$_a" in -*) _a=${_a#-} ;; esac
+					case "$_a" in
+						''|*[!0-9]*) _a=0 ;;
+					esac
+					[ "$_a" -gt "$_s_im" ] && _s_im="$_a"
+					case "$_vol" in
+						''|*[!0-9]*) _v=0 ;;
+						*) _v="$_vol" ;;
+					esac
+					[ "$_v" -gt "$_s_vm" ] && _s_vm="$_v"
+					case "$_pow" in
+						''|*[!0-9]*) _p=0 ;;
+						*) _p=$((_pow / 1000)) ;;
+					esac
+					if [ "$_p" -le 0 ] && [ "$_v" -gt 0 ] && [ "$_a" -gt 0 ]; then
+						_p=$(( (_a / 1000) * (_v / 1000) / 1000 ))
+					fi
+					[ "$_p" -gt "$_s_pm" ] && _s_pm="$_p"
+				done < "$_f"
+
+				emit "log.$_i.name"     "${_f##*/}"
+				emit "log.$_i.start"    "$_s_st"
+				emit "log.$_i.end"      "$_s_en"
+				emit "log.$_i.aborted"  "$_s_ab"
+				emit "log.$_i.samples"  "$_s_cn"
+				emit "log.$_i.cap0"     "$_s_c0"
+				emit "log.$_i.cap1"     "$_s_c1"
+				emit "log.$_i.temp_max" "$_s_tm"
+				emit "log.$_i.cur_max"  "$_s_im"
+				emit "log.$_i.volt_max" "$_s_vm"
+				emit "log.$_i.pmax_mw"  "$_s_pm"
+				emit "log.$_i.cnt0"     "$_s_cf"
+				emit "log.$_i.cnt1"     "$_s_cl"
+				_i=$((_i + 1))
+			done
+		fi
 	fi
 
 	emit log.list_count "$_i"
+	# 诊断：文件数 / 有没有 awk / 第一轮解析出几条 / 最终几条。
+	# 页面在条数对不上时会把这一串原样显示出来，出问题不用再猜。
+	emit log_scan "$_ln/$_have_awk/$_r1/$_i"
+	emit log_dbg "$_dbg"
 	[ -n "$_err" ] && emit log_err "$_err"
 	# 读不出来的文件点名报出去。以前页面只会笼统地说「文件可能写坏了」，
 	# 用户根本不知道该看哪一个；现在至少知道是哪个文件、要不要去删掉它。
 	_bad=""
+	# shellcheck disable=SC2086
 	for _f in $_files; do
 		[ -r "$_f" ] || _bad="$_bad ${_f##*/}"
 	done
 	[ -n "$_bad" ] && emit log_bad "$_bad"
-	# 结束哨兵：页面靠它区分「确实没有会话」和「脚本被中断/超时，
-	# 只吐了半截」。没有这一行就说明列表没走完，不要当成 0 条。
+	# 结束哨兵：页面靠它区分「确实没有会话」和「脚本被中断/超时，只吐了
+	# 半截」。没有这一行就说明列表没走完，不要当成 0 条。
 	emit log_list_done 1
 	return 0
 }
@@ -407,9 +501,34 @@ dump_session() {
 	emit session.count   "$_i"
 }
 
+# ---------------------------------------------------- 只要文件名（最后兜底） ---
+# 页面在「明明有文件却一条也解析不出来」时会退到这一步。
+# 这里不解析任何内容、不依赖 awk、不依赖 ls，只把目录里的文件名按时间倒序列出来，
+# 保证用户至少能看见「有哪几次充电」，点进去还能单独读那一个文件。
+list_names() {
+	# 先把状态区打出来，页面上的「记录中/未在记录」才不会因为退到兜底就变空。
+	log_state
+	_all=""
+	for _f in "$LOGDIR"/*.log; do
+		[ -f "$_f" ] || continue
+		_all="$_f $_all"
+	done
+	_i=0
+	for _f in $_all; do
+		emit "log.$_i.name" "${_f##*/}"
+		emit "log.$_i.samples" 0
+		_i=$((_i + 1))
+		[ "$_i" -ge 40 ] && break
+	done
+	emit log.list_count "$_i"
+	emit log_list_done 1
+	return 0
+}
+
 case "$MODE" in
-	--logs) list_sessions; exit 0 ;;
-	--log)  dump_session "$@"; exit 0 ;;
+	--logs)  list_sessions; exit 0 ;;
+	--names) list_names;    exit 0 ;;
+	--log)   dump_session "$@"; exit 0 ;;
 esac
 
 # ============================================================ 实时采集 =========
