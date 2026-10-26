@@ -28,6 +28,16 @@
 MODDIR="${MODDIR:-${0%/*}}"
 [ -f "$MODDIR/module.prop" ] || MODDIR=/data/adb/modules/dtbo_charge_unlock
 
+# 从 WebUI（ksu.exec）起的 shell，PATH 有时只剩一两个目录，dd / sha256sum / sed /
+# ls / awk 一个都找不到，脚本会在第一步就莫名其妙失败。标准目录只追加不覆盖。
+for _pd in /system/bin /system/xbin /vendor/bin /odm/bin /sbin /system/sbin; do
+	case ":$PATH:" in
+		*":$_pd:"*) ;;
+		*) PATH="${PATH:+$PATH:}$_pd" ;;
+	esac
+done
+unset _pd
+
 # ---------------------------------------------------------------- 默认配置 --
 # FFC（全速充电）温度窗口，单位 ℃。置空表示沿用参考表原始数值（0~55）。
 FFC_TEMP_LOW=0

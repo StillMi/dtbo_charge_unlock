@@ -904,13 +904,22 @@
         logsDrawn = true;
         logList = next;
         logListErr = '';
-        /* 有文件却一条都解析不出来：说清楚，不要假装「还没有记录」。
-           真机上 awk 不一定有（Android 的 toybox 就没带），脚本已经会退回
-           纯 shell 扫；这里兜底报告解析结果对不上的情况。 */
+        /* 文件数和解析出来的条数对不上时要说清楚，但别吓人：
+             - 列表最多显示 40 个，文件超过 40 个时「只解析出 40 条」是正常的；
+             - 少了 log_list_done 哨兵说明脚本被中断/超时，只吐了半截，
+               这时不能当成「没有记录」；
+             - 剩下那种「真的有文件却一条都解析不出来」才是问题。 */
         var files = num(k['log_count']);
-        if (files !== null && files > next.length) {
-          logListErr = '有 ' + files + ' 个日志文件，只解析出 ' + next.length
-                     + ' 条。' + ((k['log_err'] || '').trim() ? '（' + (k['log_err'] || '').trim() + '）' : '');
+        var cap = 40;
+        var expect = files === null ? null : (files > cap ? cap : files);
+        var done = (k['log_list_done'] || '').trim() === '1';
+        var why = (k['log_err'] || '').trim();
+        if (!done && files !== null && files > 0) {
+          logListErr = '读日志列表时被中断了（只拿到 ' + next.length + ' 条）。'
+                     + '日志文件多的时候第一次会慢一点。' + (why ? '（' + why + '）' : '');
+        } else if (expect !== null && expect > next.length) {
+          logListErr = '有 ' + files + ' 个日志文件，只解析出 ' + next.length + ' 条。'
+                     + (why ? '（' + why + '）' : '（文件可能写坏了，或者读不出来）');
         }
         renderLogList();
       })

@@ -388,6 +388,56 @@ else
 	bad "兜底结果与 awk 不一致"
 fi
 
+echo "== 会话排序与结束哨兵 =="
+# 页面靠 log_list_done 区分「真的没有会话」和「脚本被中断只吐了半截」。
+# 少了这一行，一次超时就会显示成「一个都没有」，比报错还糟。
+rm -rf "$LOGDIR"
+mkdir -p "$LOGDIR"
+for _d in 01 02 03; do
+	cat > "$LOGDIR/202510${_d}-100000.log" <<'EOF'
+#dtbo-chargelog v2
+#start=1759284000
+1759284010,40,320,2000000,4000000,1000,Charging,8000000,9000000,3000000,330
+#end=1759284030
+EOF
+done
+CHARGELOG_DIR="$LOGDIR" MODDIR="$MOD" sh "$MODDIR_SRC/monitor.sh" --logs > "$SB/ord.txt" 2>&1
+_v=$(grep '^log_list_done=' "$SB/ord.txt" | cut -d= -f2-)
+[ "$_v" = "1" ] && ok "有 log_list_done 哨兵" || bad "log_list_done [$_v] 应为 1"
+_v=$(grep '^log.0.name=' "$SB/ord.txt" | cut -d= -f2-)
+[ "$_v" = "20251003-100000.log" ] && ok "最新的排在第一个" || bad "log.0.name [$_v] 应为最新的"
+_v=$(grep '^log.2.name=' "$SB/ord.txt" | cut -d= -f2-)
+[ "$_v" = "20251001-100000.log" ] && ok "最旧的排在最后" || bad "log.2.name [$_v] 应为最旧的"
+# 列表上限 40：超过时也要给哨兵，否则页面会误报「被中断」
+for _i in $(seq 4 45); do
+	printf '#dtbo-chargelog v2\n#start=1759284000\n1759284010,40,320,2000000,4000000,1000,Charging,8000000,9000000,3000000,330\n#end=1759284030\n' \
+		> "$LOGDIR/202509$(_p2=$_i; [ "$_i" -lt 10 ] && _p2="0$_i"; echo "$_p2")-100000.log"
+done
+CHARGELOG_DIR="$LOGDIR" MODDIR="$MOD" sh "$MODDIR_SRC/monitor.sh" --logs > "$SB/cap.txt" 2>&1
+_v=$(grep '^log.list_count=' "$SB/cap.txt" | cut -d= -f2-)
+[ "$_v" = "40" ] && ok "超过 40 个只列 40 个" || bad "list_count [$_v] 应为 40"
+_v=$(grep '^log_list_done=' "$SB/cap.txt" | cut -d= -f2-)
+[ "$_v" = "1" ] && ok "截断后仍给哨兵（页面不会误报中断）" || bad "log_list_done [$_v]"
+
+echo "== 空文件不能污染下一个文件的采样数 =="
+# `|| [ -n "$_t" ]` 是给「最后一行没有换行」用的，但 _t 留着上一个文件的值时，
+# 空文件会被多算一个采样点。
+rm -rf "$LOGDIR"
+mkdir -p "$LOGDIR"
+: > "$LOGDIR/20251005-100000.log"
+cat > "$LOGDIR/20251004-100000.log" <<'EOF'
+#dtbo-chargelog v2
+#start=1759284000
+1759284010,40,320,2000000,4000000,1000,Charging,8000000,9000000,3000000,330
+#end=1759284030
+EOF
+MONITOR_NO_AWK=1 CHARGELOG_DIR="$LOGDIR" MODDIR="$MOD" \
+	sh "$MODDIR_SRC/monitor.sh" --logs > "$SB/empty1.txt" 2>&1
+_v=$(grep '^log.0.samples=' "$SB/empty1.txt" | cut -d= -f2-)
+[ "$_v" = "0" ] && ok "空文件 samples=0" || bad "空文件 samples [$_v] 应为 0"
+_v=$(grep '^log.1.samples=' "$SB/empty1.txt" | cut -d= -f2-)
+[ "$_v" = "1" ] && ok "下一个文件 samples=1" || bad "下一个文件 samples [$_v] 应为 1"
+
 echo ""
 if [ "$fail" -eq 0 ]; then
 	echo "=== chargelog.sh 自测通过 ==="

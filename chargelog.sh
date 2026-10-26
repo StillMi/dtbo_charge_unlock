@@ -38,6 +38,16 @@ SYS="${SYSFS_ROOT:-/sys}"
 PROC="${PROC_ROOT:-/proc}"
 MODDIR="${MODDIR:-/data/adb/modules/dtbo_charge_unlock}"
 
+# 由 WebUI / 别的脚本拉起来时，PATH 不一定带标准目录。本脚本用到的 date / ls /
+# grep 找不到时会安静地什么都不做（心跳不写、日志不轮转），所以这里补齐。
+for _pd in /system/bin /system/xbin /vendor/bin /odm/bin /sbin /system/sbin; do
+	case ":$PATH:" in
+		*":$_pd:"*) ;;
+		*) PATH="${PATH:+$PATH:}$_pd" ;;
+	esac
+done
+unset _pd
+
 # 被 copy 到别处执行时 $0 可能不是模块目录，优先用自身位置
 HERE="${0%/*}"
 [ -f "$HERE/module.prop" ] && MODDIR="$HERE"

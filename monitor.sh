@@ -27,6 +27,18 @@ SYS="${SYSFS_ROOT:-/sys}"
 PROC="${PROC_ROOT:-/proc}"
 MODDIR="${MODDIR:-/data/adb/modules/dtbo_charge_unlock}"
 
+# 从 WebUI（ksu.exec）起的 shell，PATH 有时只剩一两个目录，ls / awk / grep / date
+# 一个都找不到。本脚本绝大部分靠 shell 内建，但列日志、取时间还是要外部命令，
+# 找不到时它们只会安静地什么都不输出 —— 表现就是「明明有日志文件却一条都列不出来」。
+# 这里把标准目录补进去（只追加不覆盖），让行为不再依赖调用方给的环境。
+for _pd in /system/bin /system/xbin /vendor/bin /odm/bin /sbin /system/sbin; do
+	case ":$PATH:" in
+		*":$_pd:"*) ;;
+		*) PATH="${PATH:+$PATH:}$_pd" ;;
+	esac
+done
+unset _pd
+
 emit() { printf '%s=%s\n' "$1" "$2"; }
 
 # 行尾 CR（配置/状态文件可能在 Windows 上被编辑过）。取一次，之后用参数展开去掉，
@@ -150,10 +162,22 @@ log_state() {
 list_sessions() {
 	log_state
 
+	# 收集会话文件，最新的排前面。
+	# 以前用 `ls -1t`，但 ls 是外部命令：PATH 里没有 ls、或者 ls 报错时它什么都不
+	# 输出，于是「明明有 6 个日志文件却一条都列不出来」，页面只能报一句看不懂的
+	# 「有 6 个日志文件，只解析出 0 条」。日志名是 YYYYmmdd-HHMMSS.log，字典序
+	# 就是时间序，所以直接用 shell 的 glob（升序）反向插入 —— 不 fork、不依赖
+	# 外部命令，结果和 `ls -1t` 一致（都是最新的在前）。
+	_all=""
+	for _f in "$LOGDIR"/*.log; do
+		[ -f "$_f" ] || continue
+		_all="$_f $_all"
+	done
+
 	_files=""
 	_ln=0
-	for _f in $(ls -1t "$LOGDIR"/*.log 2>/dev/null); do
-		[ -f "$_f" ] || continue
+	# shellcheck disable=SC2086
+	for _f in $_all; do
 		_files="$_files $_f"
 		_ln=$((_ln + 1))
 		[ "$_ln" -ge 40 ] && break
@@ -161,6 +185,7 @@ list_sessions() {
 
 	if [ "$_ln" -eq 0 ]; then
 		emit log.list_count 0
+		emit log_list_done 1
 		return 0
 	fi
 
@@ -264,6 +289,9 @@ LOGEOF
 			_s_st=""; _s_en=""; _s_ab=0; _s_cn=0
 			_s_c0=""; _s_c1=""; _s_tm=0; _s_im=0; _s_vm=0; _s_pm=0
 			_s_cf=""; _s_cl=""
+			# _t 必须每个文件先清空：`|| [ -n "$_t" ]` 是给「最后一行没有换行」
+			# 用的，但 _t 留着上一个文件的值时，空文件会被多算一个采样点。
+			_t=""
 			while IFS=, read -r _t _cap _tmp _cur _vol _cnt _sts _pow _uv _ui _ct \
 				|| [ -n "$_t" ]; do
 				case "$_t" in
@@ -321,6 +349,9 @@ LOGEOF
 
 	emit log.list_count "$_i"
 	[ -n "$_err" ] && emit log_err "$_err"
+	# 结束哨兵：页面靠它区分「确实没有会话」和「脚本被中断/超时，
+	# 只吐了半截」。没有这一行就说明列表没走完，不要当成 0 条。
+	emit log_list_done 1
 	return 0
 }
 

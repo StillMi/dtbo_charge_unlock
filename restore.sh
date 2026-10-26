@@ -11,6 +11,16 @@ MODDIR="${0%/*}"
 STATE="$MODDIR/state"
 BACKUP="$MODDIR/backup"
 
+# WebUI（ksu.exec）起的 shell，PATH 有时只剩一两个目录，dd / sha256sum / ls / sed
+# 一个都找不到，脚本会莫名其妙地在第一步就失败。把标准目录补进去（只追加不覆盖）。
+for _pd in /system/bin /system/xbin /vendor/bin /odm/bin /sbin /system/sbin; do
+	case ":$PATH:" in
+		*":$_pd:"*) ;;
+		*) PATH="${PATH:+$PATH:}$_pd" ;;
+	esac
+done
+unset _pd
+
 die() { echo "错误: $*"; exit 1; }
 
 ASSUME_YES=0

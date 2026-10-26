@@ -213,6 +213,13 @@ font:11px/1.55 monospace;white-space:pre-wrap">check 未运行</pre>
     chk('卡住时标签是未在记录', (L.stallChip || '') === '未在记录', L.stallChip);
     chk('卡住时说明提到心跳', /卡住|心跳/.test(L.stallHint || ''), L.stallHint);
     chk('卡住时显示启动按钮', L.stallStartHidden === false, 'hidden=' + L.stallStartHidden);
+    /* 「有 N 个日志文件，只解析出 M 条」这句话要分清是被中断还是真读不出来 */
+    chk('半截输出说成被中断', /中断/.test(L.partText || ''), (L.partText || '').slice(0, 40));
+    chk('半截输出不说成没有记录', !/还没有记录/.test(L.partText || ''),
+        (L.partText || '').slice(0, 40));
+    chk('真读不出说成读不出来',
+        /只解析出 0 条/.test(L.mismText || '') && /读不出来|写坏/.test(L.mismText || ''),
+        (L.mismText || '').slice(0, 40));
     chk('打开会话', L.opened === true && L.title !== '—', L.title);
     chk('会话统计已填', (L.stats || 0) >= 9, 'rows=' + L.stats);
     chk('会话含平均功率', /平均功率/.test(L.statsText || ''), '');
@@ -313,6 +320,7 @@ TABS = """<script>
                            emptyRows: -1, emptyText: '', emptyHint: '',
                            emptyChip: '', hint: '', thermalSame: false,
                            stallHint: '', stallChip: '', stallStartHidden: null,
+                           partText: '', mismText: '',
                            rawKept: false, rawLen: 0 };
 
   function txt(id) {
@@ -394,7 +402,8 @@ TABS = """<script>
   function phaseEmpty(logsBtn, liveBtn) {
     window.__setLogs('log_dir=/data/adb/dtbo_charge_unlock/chargelog\\n'
       + 'log_interval=10\\nlog_dir_ok=1\\nlog_count=0\\nlog_current=\\n'
-      + 'log_running=1\\nlog_beat=4\\nlog_plugged=0\\nlog.list_count=0\\n');
+      + 'log_running=1\\nlog_beat=4\\nlog_plugged=0\\nlog.list_count=0\\n'
+      + 'log_list_done=1\\n');
     if (liveBtn) liveBtn.click();
     setTimeout(function () {
       if (logsBtn) logsBtn.click();
@@ -416,7 +425,8 @@ TABS = """<script>
   function phaseStalled(logsBtn, liveBtn) {
     window.__setLogs('log_dir=/data/adb/dtbo_charge_unlock/chargelog\\n'
       + 'log_interval=10\\nlog_dir_ok=1\\nlog_count=3\\nlog_current=\\n'
-      + 'log_running=0\\nlog_beat=600\\nlog_plugged=0\\nlog.list_count=0\\n');
+      + 'log_running=0\\nlog_beat=600\\nlog_plugged=0\\nlog.list_count=0\\n'
+      + 'log_list_done=1\\n');
     setTimeout(function () {
       if (logsBtn) logsBtn.click();
       setTimeout(function () {
@@ -427,7 +437,43 @@ TABS = """<script>
           return b ? b.classList.contains('hidden') : null;
         })();
         if (liveBtn) liveBtn.click();
-        L.done = true;
+        phasePartial(logsBtn, liveBtn);
+      }, 900);
+    }, 400);
+  }
+
+  /* 第五轮：「有 6 个日志文件，只解析出 0 条」这句提示本身。
+     这是用户在真机上看到的原话，必须先弄清楚是哪一种：
+       a) 脚本被中断/超时，只吐了半截（没有 log_list_done 哨兵）
+       b) 文件确实读不出来（有哨兵，但条数还是对不上）
+     两种要给出不同的说法，不能只甩一句数字。 */
+  function phasePartial(logsBtn, liveBtn) {
+    /* a) 没有哨兵 = 半截 */
+    window.__setLogs('log_dir=/data/adb/dtbo_charge_unlock/chargelog\\n'
+      + 'log_interval=10\\nlog_dir_ok=1\\nlog_count=6\\nlog_current=\\n'
+      + 'log_running=0\\nlog_beat=-1\\nlog_plugged=0\\nlog.list_count=0\\n');
+    if (liveBtn) liveBtn.click();
+    setTimeout(function () {
+      if (logsBtn) logsBtn.click();
+      setTimeout(function () {
+        var u = document.getElementById('logList');
+        L.partText = (u && u.children[0]) ? txt2(u.children[0]) : '';
+        if (liveBtn) liveBtn.click();
+
+        /* b) 有哨兵但条数对不上 = 文件读不出来 */
+        window.__setLogs('log_dir=/data/adb/dtbo_charge_unlock/chargelog\\n'
+          + 'log_interval=10\\nlog_dir_ok=1\\nlog_count=6\\nlog_current=\\n'
+          + 'log_running=0\\nlog_beat=-1\\nlog_plugged=0\\nlog.list_count=0\\n'
+          + 'log_list_done=1\\n');
+        setTimeout(function () {
+          if (logsBtn) logsBtn.click();
+          setTimeout(function () {
+            var u2 = document.getElementById('logList');
+            L.mismText = (u2 && u2.children[0]) ? txt2(u2.children[0]) : '';
+            if (liveBtn) liveBtn.click();
+            L.done = true;
+          }, 900);
+        }, 400);
       }, 900);
     }, 400);
   }
@@ -542,6 +588,7 @@ def fake_fixtures(now):
             "log.%d.cnt1=%d" % (i, 2600000 + sm * 20000),
         ]
     rows.append("log.list_count=%d" % len(specs))
+    rows.append("log_list_done=1")
 
     st, en, ab, sm, c0, c1, tmax, pmw, imax, vmax = specs[0]
     pts = 60
