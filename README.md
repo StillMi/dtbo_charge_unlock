@@ -118,7 +118,7 @@
 ## 二、安装与使用
 
 1. **先按上面那节把 Scene 温控改成「丧心病狂」**，否则装了也不一定有效。
-2. 用 KernelSU（或 Magisk）安装 `dtbo_charge_unlock-v2.0.5.zip`。
+2. 用 KernelSU（或 Magisk）安装 `dtbo_charge_unlock-v2.0.6.zip`。
    **安装过程中就会刷写**，安装界面能看到完整过程与结果。
    从 v1.9.0 及更早版本升级上来时，安装脚本会自动清掉旧版的
    `post-fs-data.sh` 和 `pending` / `confirmed` / `halted` 状态文件
@@ -524,7 +524,7 @@ python tools/gen_ref.py  <参考.dts> ref
 python tools/gen_sed.py  ref/patch.list ref
 
 # 4) 打包（内置编码检查，有 CRLF / BOM 会直接拒绝）
-python tools/package.py  . dist/dtbo_charge_unlock-v2.0.5.zip
+python tools/package.py  . dist/dtbo_charge_unlock-v2.0.6.zip
 ```
 
 WebUI 的页面逻辑也可以在 PC 上验证，不需要设备。做法是造一个假的 `ksu`
