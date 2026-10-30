@@ -262,11 +262,26 @@
   /* 当前分区头部哈希，只有 --full 采集会更新 */
   var curHead = '';
 
-  function setText(id, s) {
-    var el = $(id);
+  /* 只写真的变了的属性。直接给 className / title / textContent 赋值，
+     即使值一模一样也会产生一条 DOM 变动记录，把样式重算白白叫起来 ——
+     每 2 秒一轮、每轮二十来次，等于白烧 CPU。 */
+  function setTextEl(el, s) {
     if (!el) return;
-    /* 只有真的变了才写 DOM：每 2 秒全量赋值会让页面反复重排，点起来发卡 */
     if (el.textContent !== s) el.textContent = s;
+  }
+
+  function setText(id, s) { setTextEl($(id), s); }
+
+  function setClass(el, cls) {
+    if (!el) return;
+    var v = cls || '';
+    if (el.className !== v) el.className = v;
+  }
+
+  function setTitle(el, s) {
+    if (!el) return;
+    var v = s || '';
+    if (el.title !== v) el.title = v;
   }
 
   function banner(html, kind) {
@@ -281,7 +296,11 @@
   }
 
   function render(k, d) {
-    if (k.module_version) setText('modVer', 'v' + k.module_version);
+    /* module.prop 里的 version 本来就带 v（v2.0.4），再补一个就成了 vv2.0.4 */
+    if (k.module_version) {
+      var mv = String(k.module_version).trim();
+      setText('modVer', /^v/i.test(mv) ? mv : 'v' + mv);
+    }
 
     /* ---- 电量环 ---- */
     var cap = d.capacity;
@@ -307,8 +326,8 @@
     if (d.charging && d.power !== null && d.power > 0.05) {
       chipText += ' · ' + fmt(d.power, 1) + ' W';
     }
-    chip.textContent = chipText;
-    chip.className = 'chip ' + (d.status.cls || '');
+    setTextEl(chip, chipText);
+    setClass(chip, 'chip ' + (d.status.cls || ''));
 
     /* ---- 电源说明 ---- */
     if (d.sources.length) {
@@ -391,9 +410,10 @@
 
     var t = d.temp;
     if (t === null) {
-      marker.style.display = 'none';
+      if (marker.style.display !== 'none') marker.style.display = 'none';
       return;
     }
+    if (marker.style.display === 'none') marker.style.display = '';
     var pos = Math.max(0, Math.min(100, (t - domLow) / span * 100));
     var ml = 'calc(' + pos + '% - 1.5px)';
     if (marker.style.left !== ml) marker.style.left = ml;
@@ -401,6 +421,16 @@
     var mc = 'window-marker' + (inside ? '' : ' out');
     if (marker.className !== mc) marker.className = mc;
     setText('windowMarkerText', fmt(t, 1) + '℃');
+  }
+
+  /* 温度区单位三种写法都见过：度（38）、0.1℃（380）、毫度（38000）。
+     以前的规则只认毫度，遇到按 0.1℃ 报的机型就会显示成 352℃。
+     手机不可能超过 100℃，所以这个阈值是安全的。 */
+  function normTemp(v) {
+    var a = Math.abs(v);
+    if (a >= 1000) return v / 1000;
+    if (a > 100) return v / 10;
+    return v;
   }
 
   /* ---- 温度区列表 ---- */
@@ -421,7 +451,7 @@
       var name = raw.slice(0, p);
       var val = num(raw.slice(p + 1));
       if (val === null) continue;
-      items.push({ name: name, c: Math.abs(val) >= 1000 ? val / 1000 : val });
+      items.push({ name: name, c: normTemp(val) });
     }
 
     items.sort(function (a, b) { return b.c - a.c; });
@@ -474,9 +504,9 @@
   /* ---- 模块状态 ---- */
   function renderModule(d) {
     var chip = $('moduleChip');
-    chip.textContent = d.mod.text;
-    chip.className = 'chip small ' + (d.mod.cls || '');
-    chip.title = d.mod.note || '';
+    setTextEl(chip, d.mod.text);
+    setClass(chip, 'chip small ' + (d.mod.cls || ''));
+    setTitle(chip, d.mod.note);
 
     setText('kLastFlash', d.lastFlash ? (shortTime(d.lastFlash) + '（' + relTime(d.lastFlash) + '）') : '—');
     setText('kPart', d.part || '—');
@@ -484,13 +514,13 @@
 
     if (d.headMatch === true) {
       setText('kApplied', '是（当前分区就是本模块写入的）');
-      $('kApplied').className = 'ok';
+      setClass($('kApplied'), 'ok');
     } else if (d.headMatch === false) {
       setText('kApplied', '否（已被覆盖，需重新运行）');
-      $('kApplied').className = 'warn';
+      setClass($('kApplied'), 'warn');
     } else {
       setText('kApplied', '—');
-      $('kApplied').className = '';
+      setClass($('kApplied'), '');
     }
 
     if (d.backupFile) {
@@ -530,41 +560,41 @@
     var txt = key ? (label ? label + '（' + key + '）' : key) : '—';
 
     if (!key) {
-      chip.textContent = '未检测到';
-      chip.className = 'chip small warn';
+      setTextEl(chip, '未检测到');
+      setClass(chip, 'chip small warn');
       setText('kScene', '—');
-      $('kScene').className = '';
+      setClass($('kScene'), '');
       setText('sceneHint',
         '没找到 Scene 的温控档位文件。要是确实装了 Scene 并选了「丧心病狂」，'
         + '那可能是版本不同、文件在别处，或者温控是用别的方式改的 —— '
         + '直接看充电功率有没有上去更靠谱。');
       setText('kThermalEngine', d.thermalEngine ? '在运行' : '未找到');
-      $('kThermalEngine').className = d.thermalEngine ? 'warn' : '';
-      if (top) top.className = 'banner hidden';
+      setClass($('kThermalEngine'), d.thermalEngine ? 'warn' : '');
+      if (top) setClass(top, 'banner hidden');
       return;
     }
 
     setText('kScene', txt);
-    $('kScene').className = (key === 'danger') ? 'ok' : 'warn';
+    setClass($('kScene'), (key === 'danger') ? 'ok' : 'warn');
     setText('kThermalEngine', d.thermalEngine ? '在运行' : '未找到');
-    $('kThermalEngine').className = '';
+    setClass($('kThermalEngine'), '');
 
     if (key === 'danger') {
-      chip.textContent = '已放开';
-      chip.className = 'chip small ok';
+      setTextEl(chip, '已放开');
+      setClass(chip, 'chip small ok');
       setText('sceneHint',
         'Scene 的温控档位是「丧心病狂」，系统层温控已经放开，'
         + '模块改的充电温控表能真正起作用。');
-      if (top) top.className = 'banner hidden';
+      if (top) setClass(top, 'banner hidden');
     } else {
-      chip.textContent = '可能还在限流';
-      chip.className = 'chip small warn';
+      setTextEl(chip, '可能还在限流');
+      setClass(chip, 'chip small warn');
       setText('sceneHint',
         'Scene 现在的温控档位是「' + (label || key) + '」，不是「丧心病狂」。'
         + '系统层温控优先级比 dtbo 高，这种情况下刷了模块也可能完全看不到提速。'
         + '建议先去 Scene 把温控改成「丧心病狂」，再回来确认。');
       if (top) {
-        top.className = 'banner warn';
+        setClass(top, 'banner warn');
         top.innerHTML = '系统温控没有放开（Scene 当前档位：<strong>'
           + (label || key) + '</strong>）。模块只改充电 IC 自己的温控表，'
           + '系统层的限流优先级更高 —— <strong>不把 Scene 温控改成「丧心病狂」，'
@@ -584,13 +614,13 @@
     if (has) {
       setText('kRestoreFile', d.backupFile.split('/').pop()
         + (d.backupSize !== null ? ' ' + (d.backupSize / 1024 / 1024).toFixed(1) + ' MB' : ''));
-      chip.textContent = '可恢复';
-      chip.className = 'chip small ok';
+      setTextEl(chip, '可恢复');
+      setClass(chip, 'chip small ok');
       if (btn) btn.disabled = false;
     } else {
       setText('kRestoreFile', '—');
-      chip.textContent = '没有备份';
-      chip.className = 'chip small warn';
+      setTextEl(chip, '没有备份');
+      setClass(chip, 'chip small warn');
       if (btn) btn.disabled = true;
     }
 
@@ -772,8 +802,8 @@
     var ivv = (iv !== null ? iv : 10);
 
     var chip = $('logStateChip');
-    chip.textContent = running ? '记录中' : '未在记录';
-    chip.className = 'chip small ' + (running ? 'ok' : 'warn');
+    setTextEl(chip, running ? '记录中' : '未在记录');
+    setClass(chip, 'chip small ' + (running ? 'ok' : 'warn'));
 
     setText('logInterval', String(ivv));
     $('logStartBox').classList.toggle('hidden', running);
@@ -1020,6 +1050,20 @@
 
   /* ---- 单个会话 ---- */
 
+  /* 键值行。.kvlist 是「纵向 flex + gap」的容器，它的样式规则针对的是
+     .kvlist > div；直接往里塞 dt/dd 就变成「标签一行、值一行」，值还会被
+     flex 撑开，详情页能长出几千像素的空白。 */
+  function kvRow(k, v) {
+    var row = document.createElement('div');
+    var dt = document.createElement('dt');
+    dt.textContent = k;
+    var dd = document.createElement('dd');
+    dd.textContent = v;
+    row.appendChild(dt);
+    row.appendChild(dd);
+    return row;
+  }
+
   function renderSession(s) {
     var pts = s.pts;
     var pw = [], tp = [], vt = [], cu = [], ct = [];
@@ -1077,12 +1121,7 @@
     var stats = $('logStats');
     stats.innerHTML = '';
     for (var r = 0; r < rows.length; r++) {
-      var dt = document.createElement('dt');
-      dt.textContent = rows[r][0];
-      var dd = document.createElement('dd');
-      dd.textContent = rows[r][1];
-      stats.appendChild(dt);
-      stats.appendChild(dd);
+      stats.appendChild(kvRow(rows[r][0], rows[r][1]));
     }
 
     setText('logPowerPeak', fmt(pmax, 1));
@@ -1104,12 +1143,7 @@
 
     var stats = $('logStats');
     stats.innerHTML = '';
-    var dt = document.createElement('dt');
-    dt.textContent = '读取中';
-    var dd = document.createElement('dd');
-    dd.textContent = '…';
-    stats.appendChild(dt);
-    stats.appendChild(dd);
+    stats.appendChild(kvRow('读取中', '…'));
 
     return exec('sh ' + moduleDir() + '/monitor.sh --log ' + name, 30000)
       .then(function (res) {

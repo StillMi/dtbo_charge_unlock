@@ -10,10 +10,10 @@
 import json
 import os
 import re
-import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from domfetch import fetch_dom
 
 # 场景测试需要「原样返回」，不能像 mkwebui_harness 那样每次扰动数值。
 STUB = """<script>
@@ -273,14 +273,14 @@ def build_harness(moddir, outdir, base, edge):
     url = "file:///" + index.replace("\\", "/")
     dom = os.path.join(outdir, "dom.html")
     prof = os.path.abspath(os.path.join(outdir, "profile"))
-    with open(dom, "wb") as out:
-        subprocess.run(
-            [edge, "--headless=new", "--disable-gpu", "--no-first-run",
-             "--no-default-browser-check", "--user-data-dir=" + prof,
-             "--virtual-time-budget=15000", "--dump-dom", url],
-            stdout=out, stderr=subprocess.DEVNULL)
-    with open(dom, encoding="utf-8", errors="replace") as fh:
-        return fh.read()
+    # 报告块写好后页面自己会改成真报告，等它不再说「report 未运行」。
+    ready = ("(function(){var e=document.getElementById('__check');"
+             "if(!e)return false;var s=(e.textContent||'');"
+             "return s.indexOf('report 未运行') < 0 && s.length > 20;})()")
+    html = fetch_dom(edge, url, ready, timeout_s=40, profdir=prof)
+    with open(dom, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write(html)
+    return html
 
 
 def main():

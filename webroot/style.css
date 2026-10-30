@@ -696,6 +696,8 @@ button#btnRestore:disabled { opacity: .55; pointer-events: none; }
 #logDetail .chart-box + .chart-box { margin-top: 12px; }
 #logDetail .kvlist { margin-bottom: 14px; }
 #logDetail .kvlist dt { flex: 0 0 84px; }
+/* 兜底：dt/dd 万一没被 div 包起来，也不许在纵向 flex 里被拉长 */
+.kvlist > dt, .kvlist > dd { flex: 0 0 auto; }
 
 /* ------------------------------------------------------------------ 页脚 --- */
 footer {

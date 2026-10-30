@@ -33,8 +33,11 @@ STUB = """<script>
               .replace(/^voltage_now=.*$/m, 'voltage_now=' + vol);
   }
 
-  /* 按命令分派：列表 / 只要文件名 / 单个会话 / 实时采集 */
+  /* 按命令分派：机型探测 / 列表 / 只要文件名 / 单个会话 / 实时采集。
+     机型那条必须单独答：以前一律回 BASE，页头就会把 time=… 当成机型、
+     把 module_version=… 当成槽位，截图上是一行乱码。 */
   function fixture(cmd, i) {
+    if (cmd.indexOf('getprop') >= 0) return 'Xiaomi 17\\n_a\\n';
     if (cmd.indexOf('--names') >= 0) return NAMES;
     if (cmd.indexOf('--logs') >= 0) return LOGS;
     if (cmd.indexOf('--log ') >= 0) return SESS;
@@ -137,6 +140,19 @@ font:11px/1.55 monospace;white-space:pre-wrap">check 未运行</pre>
     chk('温度区列表非空', tl && tl.children.length > 0,
         tl ? tl.children.length + ' 行' : '无');
 
+    /* 温度区单位见过三种写法（度 / 0.1℃ / 毫度），页面上必须都归一成 ℃。
+       智能手机不可能超过 100℃，所以只要有一行超了就是单位没归一。 */
+    var tlBad = [];
+    if (tl) {
+      var tvs = tl.querySelectorAll('.tv');
+      for (var ti = 0; ti < tvs.length; ti++) {
+        var nv = parseFloat((tvs[ti].textContent || '').replace('℃', ''));
+        if (isNaN(nv) || nv > 100 || nv < -40) tlBad.push(tvs[ti].textContent);
+      }
+    }
+    chk('温度区数值都归一成 ℃', tlBad.length === 0,
+        tlBad.length ? tlBad.join(',') : '全部在 -40~100');
+
     chk('模块状态已填', txt('moduleChip') !== '—', txt('moduleChip'));
     chk('上次刷写已填', txt('kLastFlash') !== '—', txt('kLastFlash'));
     chk('分区已填', txt('kPart') !== '—', txt('kPart'));
@@ -236,6 +252,9 @@ font:11px/1.55 monospace;white-space:pre-wrap">check 未运行</pre>
         /文件名/.test(L.namesHint || ''), (L.namesHint || '').slice(0, 40));
     chk('打开会话', L.opened === true && L.title !== '—', L.title);
     chk('会话统计已填', (L.stats || 0) >= 9, 'rows=' + L.stats);
+    chk('会话统计是键值行', L.statsWrap === true, 'wrap=' + L.statsWrap);
+    chk('详情卡片高度正常', (L.detailH || 0) > 200 && (L.detailH || 0) < 1700,
+        'h=' + L.detailH);
     chk('会话含平均功率', /平均功率/.test(L.statsText || ''), '');
     chk('会话含充电器温度', /充电器/.test(L.statsText || ''), '');
     chk('会话含采样间隔', /秒一点/.test(L.statsText || ''), '');
@@ -397,6 +416,11 @@ TABS = """<script>
         L.title = txt('logTitle');
         var st = document.getElementById('logStats');
         L.stats = st ? st.children.length : 0;
+        /* 每一行必须是 <div> 包着 dt+dd。直接挂 dt/dd 的话，纵向 flex 会
+           把标签和值拉成两行、中间留几百像素空白，详情卡片能撑到几千像素。 */
+        L.statsWrap = !!(st && st.children[0] && st.children[0].tagName === 'DIV');
+        var det = document.getElementById('logDetail');
+        L.detailH = det ? det.offsetHeight : -1;
         L.statsText = st ? (st.textContent || '') : '';
         L.painted  = painted(document.getElementById('logChartPower'));
         L.paintedV = painted(document.getElementById('logChartVolt'));
