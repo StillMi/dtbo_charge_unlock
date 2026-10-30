@@ -324,6 +324,10 @@ _newpid=$(cat "$LOGDIR/.pid" 2>/dev/null)
 	&& ok "start 换掉了被复用的号码（$_newpid）" || bad "start 没有重新拉起 [$_newpid]"
 kill "$_newpid" 2>/dev/null
 kill "$_other" 2>/dev/null
+# 真正拉起来的采集进程必须停干净，否则它会在后面的用例里往同一个目录
+# 新建会话、做日志轮转，把别的用例的文件删掉（偶发失败的来源）
+PROC_ROOT="$SB/proc" SYSFS_ROOT="$SYS" MODDIR="$MOD" sh "$MOD/chargelog.sh" stop >/dev/null 2>&1
+sleep 1
 
 echo "== 心跳过期（进程还活着但卡住）：start 要杀掉重来 =="
 rm -rf "$LOGDIR"
@@ -347,6 +351,10 @@ _newpid=$(cat "$LOGDIR/.pid" 2>/dev/null)
 	&& ok "卡住的进程被换掉（$_newpid）" || bad "卡住的进程没被换掉 [$_newpid]"
 kill "$_newpid" 2>/dev/null
 kill "$_stuck" 2>/dev/null
+# 真正拉起来的采集进程必须停干净，否则它会在后面的用例里往同一个目录
+# 新建会话、做日志轮转，把别的用例的文件删掉（偶发失败的来源）
+PROC_ROOT="$SB/proc" SYSFS_ROOT="$SYS" MODDIR="$MOD" sh "$MOD/chargelog.sh" stop >/dev/null 2>&1
+sleep 1
 
 echo "== 心跳新鲜时不要重复启动 =="
 rm -rf "$LOGDIR"

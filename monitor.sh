@@ -179,7 +179,14 @@ log_state() {
 # 单独放在函数外面，是因为 list_sessions 里要跑两轮（先一次 awk 扫完，
 # 条数不对再逐文件重来），拆段逻辑必须只有一份，两轮格式才不会走样。
 _consume_rows() {
-	while IFS= read -r _l; do
+	# 不用 here-doc / 管道喂 while read：mksh、ash 的 here-doc 要先写进
+	# TMPDIR 的临时文件，那个目录在 WebUI 的执行环境里不一定可写 ——
+	# 写不进去时 read 一行都拿不到，整轮就是 0 条。这里纯参数展开按换行切。
+	_rest="$1$_NL"
+	while [ -n "$_rest" ]; do
+		_l=${_rest%%"$_NL"*}
+		_rest=${_rest#*"$_NL"}
+		_l=${_l%"$_CR"}
 		case "$_l" in
 			'') continue ;;
 			*'|'*) ;;
@@ -219,9 +226,7 @@ _consume_rows() {
 		emit "log.$_i.cnt0"     "$_cf"
 		emit "log.$_i.cnt1"     "$_cl"
 		_i=$((_i + 1))
-	done <<LOGEOF
-$1
-LOGEOF
+	done
 }
 
 list_sessions() {
@@ -536,7 +541,9 @@ emit time "$(date +%s 2>/dev/null)"
 kv "$MODDIR/module.prop" version; emit module_version "$_KV"
 kv "$MODDIR/module.prop" author;  emit module_author  "$_KV"
 
-if command -v getprop >/dev/null 2>&1; then
+# 机型、槽位、刷写时间、备份大小这些开机后不会变（或只在「运行修改」后变），
+# 每 2 秒问一遍就是白白多 fork 好几次。只在 --full 时取，页面沿用上一次的值。
+if [ "$MODE" = "--full" ] && command -v getprop >/dev/null 2>&1; then
 	emit device_model "$(getprop ro.product.model 2>/dev/null)"
 	emit device_slot  "$(getprop ro.boot.slot_suffix 2>/dev/null)"
 fi
@@ -637,19 +644,23 @@ rv "$S/orig_sha";       emit state_orig_sha  "$_RV"
 rv "$S/part";           emit state_part      "$_RV"
 rv "$S/last_head";      emit state_last_head "$_RV"
 rv "$S/boot_time";      emit state_boot_time "$_RV"
-emit state_last_flash "$(stat -c %Y "$S/last_sha" 2>/dev/null)"
+[ "$MODE" = "--full" ] && emit state_last_flash "$(stat -c %Y "$S/last_sha" 2>/dev/null)"
 
-# 最近一次备份
-_bk=$(ls -1t "$MODDIR/backup/"*.img 2>/dev/null | head -n 1)
-if [ -n "$_bk" ]; then
-	emit backup_file "$_bk"
-	emit backup_size "$(stat -c %s "$_bk" 2>/dev/null)"
-	emit backup_time "$(stat -c %Y "$_bk" 2>/dev/null)"
-fi
+# 最近一次备份：用内建 test -nt 挑最新的，不再 ls | head（省两次 fork）
+_bk=""
 _bc=0
 for _b in "$MODDIR/backup/"*.img; do
-	[ -f "$_b" ] && _bc=$((_bc + 1))
+	[ -f "$_b" ] || continue
+	_bc=$((_bc + 1))
+	if [ -z "$_bk" ] || [ "$_b" -nt "$_bk" ]; then _bk="$_b"; fi
 done
+if [ -n "$_bk" ]; then
+	emit backup_file "$_bk"
+	if [ "$MODE" = "--full" ]; then
+		emit backup_size "$(stat -c %s "$_bk" 2>/dev/null)"
+		emit backup_time "$(stat -c %Y "$_bk" 2>/dev/null)"
+	fi
+fi
 emit backup_count "$_bc"
 
 # 目标温度窗口（配置里的，不是 dtbo 里的实际值）
@@ -697,7 +708,9 @@ for _r in "$_mroot/modules_update" "$_mroot/modules"; do
 					[ -r "$_p" ] || continue
 					IFS= read -r _scene 2>/dev/null < "$_p" || :
 					_scene=${_scene%"$_CR"}
-					_scene=$(printf '%s' "$_scene" | tr -d ' \t')
+					# 档位就是一个单词：去掉首尾空格/制表符（参数展开，不 fork tr）
+					_scene=${_scene#"${_scene%%[! 	]*}"}
+					_scene=${_scene%"${_scene##*[! 	]}"}
 					_scene_where="$_p"
 					break
 				done

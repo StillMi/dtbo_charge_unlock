@@ -153,7 +153,6 @@ expect "$OUT" module_author "Tester"
 expect "$OUT" state_last_sha "abc123def456"
 expect "$OUT" state_boot_time ""
 expect "$OUT" backup_file "$MOD/backup/dtbo_a_new.img"
-expect "$OUT" backup_size 8192
 expect "$OUT" backup_count 2
 expect "$OUT" cfg_ffc_low 0
 expect "$OUT" cfg_ffc_high 56
@@ -253,6 +252,8 @@ printf '%s\n' "$_head" > "$MOD/state/last_head"
 SYSFS_ROOT="$SYS" MODDIR="$MOD" sh "$MODDIR_SRC/monitor.sh" --full > "$SB/out4.txt" 2>&1
 expect "$SB/out4.txt" state_last_head "$_head"
 expect "$SB/out4.txt" state_cur_head "$_head"
+# 刷写时间 / 备份大小只在 --full 时采（轮询不 fork stat）
+expect "$SB/out4.txt" backup_size 8192
 
 # 不带 --full 时不该去读分区（轮询每 2 秒一次，不能反复读盘）
 SYSFS_ROOT="$SYS" MODDIR="$MOD" sh "$MODDIR_SRC/monitor.sh" > "$SB/out5.txt" 2>&1
@@ -260,6 +261,11 @@ if grep -q '^state_cur_head=' "$SB/out5.txt" 2>/dev/null; then
 	bad "不带 --full 时也读了分区"
 else
 	ok "不带 --full 时跳过分区读取"
+fi
+if grep -q '^backup_size=\|^state_last_flash=\|^device_model=' "$SB/out5.txt" 2>/dev/null; then
+	bad "轮询时也去取了只该 --full 才取的静态信息"
+else
+	ok "轮询时不重复取静态信息（stat / getprop）"
 fi
 
 # 分区被换掉（模拟系统 OTA）→ 哈希不再一致

@@ -1249,6 +1249,9 @@
   var logTimer = null;
   var autoOn = true;
 
+  var STICKY = ['state_last_flash', 'backup_size', 'backup_time'];
+  var sticky = {};
+
   function refresh(full) {
     if (busy) return Promise.resolve();
     busy = true;
@@ -1262,6 +1265,14 @@
         }
         var k = parseKV(res.stdout);
         if (!k.time) throw new Error('采集脚本没有输出');
+
+        /* 刷写时间、备份大小/时间只在 --full 时才采（要 fork stat），
+           轮询时沿用上一次 --full 的值。 */
+        for (var si = 0; si < STICKY.length; si++) {
+          var sk = STICKY[si];
+          if (sk in k) sticky[sk] = k[sk];
+          else if (sk in sticky) k[sk] = sticky[sk];
+        }
 
         var d = derive(k);
         last = d;
