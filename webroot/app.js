@@ -284,6 +284,17 @@
     if (el.title !== v) el.title = v;
   }
 
+  /* 会话名要拼进 shell 命令，也会拼进确认框的 HTML。
+     两处都得转义：名字来自文件名，理论上可能带引号或 & < >。 */
+  function shellQuote(s) {
+    return "'" + String(s).replace(/'/g, "'\\''") + "'";
+  }
+
+  function esc(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
   function banner(html, kind) {
     var b = $('banner');
     if (!html) {
@@ -775,17 +786,36 @@
       btns[i].classList.toggle('on', btns[i].getAttribute('data-tab') === name);
     }
 
+    /* 切标签的重活（读日志、采集 sysfs）一律挪到下一帧之后再做。
+       以前是在 click 处理里直接开跑：高亮还没画出来就先忙着清列表、
+       拼命令、等回调，手指按下去会先愣一下才看到选中态。 */
+    requestAnimationFrame(function () { setTimeout(function () { afterSwitch(name); }, 0); });
+  }
+
+  /* 上一次实时采集的时间，用来判断切回实时页要不要立刻再采一次 */
+  var lastPollAt = 0;
+
+  function afterSwitch(name) {
+    if (name !== tab) return;   /* 期间又切走了，别做无用功 */
+
     if (name === 'logs') {
       /* 日志页不做 2 秒的 sysfs 轮询，但必须换成一个慢速刷新：
          之前是完全停掉，结果插拔充电器后「记录中 / 等待插上」一直不动，
-         看起来像没写日志。日志只是一次 ls + 一次文件扫描，5 秒一次不费电。 */
+         看起来像没写日志。日志只是一次目录扫描，5 秒一次不费电。 */
       stopTimer();
-      loadLogs();
+      /* 已经画过一次列表就不要再清成「读取中…」重画：直接留着旧内容，
+         在后台静默刷新（指纹没变时一个节点都不会动）。这才是切换跟手的关键。 */
+      if (logsDrawn) loadLogs(true);
+      else loadLogs();
       if (autoOn) startLogTimer();
     } else {
       stopLogTimer();
-      /* 切回来只做一次轻量采集，不要每次都读 1MB 分区 */
-      if (autoOn) { refresh(false); startTimer(); }
+      /* 切回来只做一次轻量采集，不要每次都读 1MB 分区。
+         刚采过就别再采一次 —— 来回点标签会变成连续两次采集。 */
+      if (autoOn) {
+        if (Date.now() - lastPollAt > 1200) refresh(false);
+        startTimer();
+      }
     }
   }
 
@@ -807,6 +837,31 @@
 
     setText('logInterval', String(ivv));
     $('logStartBox').classList.toggle('hidden', running);
+
+    /* 自动保留上限：以 config.conf 为准（monitor.sh 报回来的 log_max）。
+       用户刚点完下拉框、脚本还没答回来时不要抢着改，否则会跳回去一下。 */
+    var mx = num(k.log_max);
+    if (mx !== null && !logMaxBusy) {
+      var sel = $('logMax');
+      var want = String(mx);
+      if (sel && sel.value !== want && !logBusy) {
+        var has = false;
+        for (var oi = 0; oi < sel.options.length; oi++) {
+          if (sel.options[oi].value === want) { has = true; break; }
+        }
+        /* 配置里是别的数字（比如手改过 25）时，临时插一个选项，别显示错值 */
+        if (!has) {
+          var op = document.createElement('option');
+          op.value = want;
+          op.textContent = want;
+          sel.appendChild(op);
+        }
+        sel.value = want;
+      }
+      setText('logKeepNote', mx > 0
+        ? '自动保留最近 ' + mx + ' 次，超出后删最旧的。删的只是日志文件，不碰分区。'
+        : '现在不自动删。日志会一直攒着，攒多了要自己来清。删的只是日志文件，不碰分区。');
+    }
 
     /* 几句话覆盖全部状态，让用户不用猜：
          目录没建好 / 进程没跑 / 心跳停了 / 在跑且在记 / 在跑且插着电但还没采到点 / 在跑但没插电 */
@@ -893,8 +948,24 @@
         if (s.samples <= 0 && !s.end) dur.textContent = '空会话';
         else dur.textContent = s.end ? durationText(s.start, s.end) : '进行中';
 
+        var right = document.createElement('div');
+        right.className = 'lt-right';
+        right.appendChild(dur);
+
+        var del = document.createElement('button');
+        del.type = 'button';
+        del.className = 'lt-del';
+        del.textContent = '×';
+        del.title = '删掉这一次记录';
+        del.setAttribute('aria-label', '删掉这一次记录');
+        del.addEventListener('click', function (ev) {
+          ev.stopPropagation();
+          deleteSession(s);
+        });
+        right.appendChild(del);
+
         li.appendChild(main);
-        li.appendChild(dur);
+        li.appendChild(right);
         li.addEventListener('click', function () { openSession(s.name); });
         ul.appendChild(li);
       })(logList[i]);
@@ -903,6 +974,89 @@
 
   function loadLogs(silent) {
     return loadLogsRun(silent, 0);
+  }
+
+  /* ---- 删掉一次记录 / 清空历史 / 自动保留上限 ---- */
+
+  var logBusy = false;
+  /* 下拉框刚被用户改过、命令还在跑：这段时间别让 log_max 把它拨回去 */
+  var logMaxBusy = false;
+
+  /* 删一个会话。确认框只说这一件事，不吓人；删完立刻重画列表，
+     用户不用自己再点刷新。 */
+  function deleteSession(s) {
+    if (logBusy) return;
+    var when = shortTime(s.start) || s.name;
+    askConfirm('删掉 <b>' + esc(when) + '</b> 这一次记录？<br>'
+             + '只删这个日志文件，不影响分区和已经刷进去的 dtbo。').then(function (ok) {
+      if (!ok) return;
+      logBusy = true;
+      exec('sh ' + moduleDir() + '/monitor.sh --del ' + shellQuote(s.name), 20000)
+        .then(function (res) {
+          var k = parseKV(res.stdout || '');
+          var err = (k['del_err'] || '').trim();
+          if (err) throw new Error(err);
+          if ((k['del_ok'] || '').trim() !== '1') {
+            throw new Error((res.stderr || '').trim() || ('monitor.sh 返回 ' + res.errno));
+          }
+          banner('删掉 ' + esc(when) + ' 这次记录。删的只是日志文件。', 'ok');
+          return loadLogs(true);
+        })
+        .catch(function (e) {
+          banner('删不掉：' + (e && e.message ? e.message : e), 'err');
+        })
+        .then(function () { logBusy = false; });
+    });
+  }
+
+  function clearAllLogs() {
+    if (logBusy) return;
+    askConfirm('清空所有历史记录？<br>正在记录的那一次会留着，其余全部删掉。'
+             + '只删日志文件，不影响分区。').then(function (ok) {
+      if (!ok) return;
+      logBusy = true;
+      exec('sh ' + moduleDir() + '/monitor.sh --clear', 20000)
+        .then(function (res) {
+          var k = parseKV(res.stdout || '');
+          var err = (k['del_err'] || '').trim();
+          if (err) throw new Error(err);
+          if ((k['del_ok'] || '').trim() !== '1') {
+            throw new Error((res.stderr || '').trim() || ('monitor.sh 返回 ' + res.errno));
+          }
+          var n = num(k['del_count']) || 0;
+          var kept = (k['del_kept'] || '').trim() === '1';
+          banner('删掉了 ' + n + ' 个历史记录。'
+               + (kept ? '正在记录的那一次留着。' : ''), 'ok');
+          return loadLogs(true);
+        })
+        .catch(function (e) {
+          banner('清空失败：' + (e && e.message ? e.message : e), 'err');
+        })
+        .then(function () { logBusy = false; });
+    });
+  }
+
+  function setLogMax(v) {
+    if (logBusy) return;
+    logBusy = true;
+    exec('sh ' + moduleDir() + '/monitor.sh --setmax ' + v, 20000)
+      .then(function (res) {
+        var k = parseKV(res.stdout || '');
+        var err = (k['del_err'] || '').trim();
+        if (err) throw new Error(err);
+        if ((k['del_ok'] || '').trim() !== '1') {
+          throw new Error((res.stderr || '').trim() || ('monitor.sh 返回 ' + res.errno));
+        }
+        var n = num(k['del_count']) || 0;
+        if (n > 0) banner('保留上限改成 ' + v + '，顺手删掉了 ' + n + ' 个旧记录。', 'ok');
+        return loadLogs(true);
+      })
+      .catch(function (e) {
+        banner('改不了保留数量：' + (e && e.message ? e.message : e), 'err');
+        /* 失败了就把下拉框拨回真实值，别让界面撒谎 */
+        return loadLogs(true);
+      })
+      .then(function () { logBusy = false; });
   }
 
   /* mode 决定这次让 monitor.sh 怎么列：
@@ -970,13 +1124,7 @@
         logFirst = (k['log_first'] || '').trim();
         logNamesOnly = (mode === 2);
 
-        /* 指纹比对：静默刷新时没变就一个节点都不动。但非静默（刚把列表清成
-           「读取中…」）必须重画，否则会把自己刚写的占位留在屏幕上；
-           「从来没画过」也不能算没变 —— 空列表的指纹也是空串。 */
-        var sig = listSig(next);
-        if (silent && logsDrawn && sig === logSig) return;
-        logSig = sig;
-        logsDrawn = true;
+        /* 先记下这一次要画什么，指纹在下面「消息也算完」之后统一比 */
         logList = next;
         logListErr = '';
         /* 文件数和解析出来的条数对不上时要说清楚，但别吓人：
@@ -1011,6 +1159,15 @@
                      + (why ? '（' + why + '）' : '（列表没读完，刷新一次试试）')
                      + (scan ? '诊断：文件/awk/第一轮/最终 = ' + scan : '');
         }
+
+        /* 静默刷新：列表内容 + 提示文字 + 保留上限说明都没变，就一个节点都不动。
+           以前只比列表内容 —— 空列表配不同的诊断说明（被中断 / 读不出来 /
+           只读到文件名）签名都是空串，会把更新吞掉，页面停在旧文字上。 */
+        var sig = listSig(next) + '\u0001' + logListErr + '\u0001'
+                + ($('logHintText') ? $('logHintText').textContent : '');
+        if (silent && logsDrawn && sig === logSig) return;
+        logSig = sig;
+        logsDrawn = true;
         renderLogList();
       })
       .catch(function (err) {
@@ -1145,7 +1302,7 @@
     stats.innerHTML = '';
     stats.appendChild(kvRow('读取中', '…'));
 
-    return exec('sh ' + moduleDir() + '/monitor.sh --log ' + name, 30000)
+    return exec('sh ' + moduleDir() + '/monitor.sh --log ' + shellQuote(name), 30000)
       .then(function (res) {
         var k = parseKV(res.stdout || '');
         var n = num(k['session.count']) || 0;
@@ -1222,6 +1379,14 @@
     }
 
     $('btnLogBack').addEventListener('click', backToList);
+    $('btnLogClear').addEventListener('click', clearAllLogs);
+    $('logMax').addEventListener('change', function () {
+      var v = this.value;
+      logMaxBusy = true;
+      setLogMax(v);
+      /* 命令回来后由 loadLogs 里的 log_max 校准，这里只负责解锁 */
+      setTimeout(function () { logMaxBusy = false; }, 3000);
+    });
 
     $('btnLogStart').addEventListener('click', function () {
       var b = $('btnLogStart');
@@ -1276,6 +1441,7 @@
 
         var d = derive(k);
         last = d;
+        lastPollAt = Date.now();
 
         if (!k.batt_dir) {
           banner('没有找到电池节点（<code>/sys/class/power_supply/battery</code> 不存在）。'

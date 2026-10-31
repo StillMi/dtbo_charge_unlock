@@ -41,6 +41,18 @@ STUB = """<script>
     if (cmd.indexOf('--names') >= 0) return NAMES;
     if (cmd.indexOf('--logs') >= 0) return LOGS;
     if (cmd.indexOf('--log ') >= 0) return SESS;
+    /* 删除 / 清空 / 改保留上限：都当成成功，并把删了几个报回去。
+       __delFail 打开时改成失败，用来验证页面会把原因显示出来。 */
+    if (cmd.indexOf('--del ') >= 0 || cmd.indexOf('--clear') >= 0
+        || cmd.indexOf('--setmax') >= 0) {
+      if (window.__delFail) return 'del_err=' + window.__delFail + '\\n';
+      if (cmd.indexOf('--clear') >= 0) return 'del_ok=1\\ndel_count=2\\ndel_kept=1\\n';
+      if (cmd.indexOf('--setmax') >= 0) {
+        var mv = (cmd.match(/--setmax\\s+(\\d+)/) || [])[1] || '0';
+        return 'del_ok=1\\ndel_count=0\\nlog_max=' + mv + '\\n';
+      }
+      return 'del_ok=1\\ndel_name=x\\n';
+    }
     return variant(BASE, i);
   }
 
@@ -265,6 +277,23 @@ font:11px/1.55 monospace;white-space:pre-wrap">check 未运行</pre>
     chk('会话峰值已填', /^\\d/.test(L.peaks || ''), L.peaks);
     chk('返回列表', L.back === true, 'back=' + L.back);
 
+    /* ---- 删除 / 清空 / 自动保留 ---- */
+    chk('每行都有删除按钮', (L.delBtns || 0) >= 2, 'btns=' + L.delBtns);
+    chk('保留上限已回填', L.maxInit === '40', 'value=' + L.maxInit);
+    chk('保留说明已填', /自动保留|不自动删/.test(L.keepNote || ''), L.keepNote);
+    chk('点删除弹出确认框', L.delModal === true, 'opened=' + L.delModal);
+    chk('确认后才调用删除', L.delCalled === true, 'called=' + L.delCalled);
+    chk('删完有提示', /删掉/.test(L.delBanner || ''), (L.delBanner || '').slice(0, 40));
+    chk('清空弹出确认框', L.clearModal === true, 'opened=' + L.clearModal);
+    chk('确认后才清空', L.clearCalled === true, 'called=' + L.clearCalled);
+    chk('清空后说明删了几个', /删掉(了)? \d+ 个/.test(L.clearBanner || ''),
+        (L.clearBanner || '').slice(0, 40));
+    chk('改保留上限会写回配置', L.maxCalled === '10', 'called=' + L.maxCalled);
+    chk('改完下拉框跟配置一致', L.maxValue === '10', 'value=' + L.maxValue);
+    chk('删失败要说出原因', /删不掉/.test(L.failBanner || ''),
+        (L.failBanner || '').slice(0, 40));
+    chk('删失败列表还在', (L.failListRows || 0) >= 1, 'rows=' + L.failListRows);
+
     /* ---- 性能：重复采集不该重建 DOM ---- */
     chk('温度列表不重建节点', L.thermalSame === true, 'same=' + L.thermalSame);
     chk('折叠时不生成原始数据', L.rawKept === true, 'len=' + L.rawLen);
@@ -363,7 +392,11 @@ TABS = """<script>
                            stallHint: '', stallChip: '', stallStartHidden: null,
                            partText: '', mismText: '', zeroText: '',
                            namesRows: -1, namesText: '', namesHint: '',
-                           rawKept: false, rawLen: 0 };
+                           rawKept: false, rawLen: 0,
+                           delBtns: -1, delModal: false, delCalled: false,
+                           delBanner: '', clearModal: false, clearCalled: false,
+                           clearBanner: '', maxCalled: '', maxValue: '', maxInit: '',
+                           keepNote: '', failBanner: '', failListRows: -1 };
 
   function txt(id) {
     var e = document.getElementById(id);
@@ -565,7 +598,7 @@ TABS = """<script>
                     var h4 = document.getElementById('logHintText');
                     L.namesHint = h4 ? txt2(h4) : '';
                     if (liveBtn) liveBtn.click();
-                    L.done = true;
+                    phaseManage(logsBtn, liveBtn);
                   }, 900);
                 }, 400);
               }, 900);
@@ -574,6 +607,79 @@ TABS = """<script>
         }, 400);
       }, 900);
     }, 400);
+  }
+
+
+  /* 第六轮：删除与清理。
+       点某一行的 × → 弹确认框 → 确认后才调 --del
+       清空历史 → 确认后调 --clear
+       改「自动保留最近」→ 调 --setmax N
+       删失败时把原因说出来，不能静悄悄什么都不发生 */
+  async function phaseManage(logsBtn, liveBtn) {
+    function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+    function callsSince(n) { return (window.__calls || []).slice(n); }
+    function hasCall(list, re) {
+      for (var i = 0; i < list.length; i++) { if (re.test(list[i])) return true; }
+      return false;
+    }
+    function bannerText() { return txt('banner'); }
+
+    liveBtn.click();
+    await sleep(300);
+    logsBtn.click();
+    await sleep(1000);
+
+    L.delBtns = document.querySelectorAll('#logList .lt-del').length;
+    L.maxValue = (document.getElementById('logMax') || {}).value || '';
+    L.maxInit = L.maxValue;
+    L.keepNote = txt('logKeepNote');
+
+    /* a) 删一条 */
+    var n0 = (window.__calls || []).length;
+    var del = document.querySelector('#logList .lt-del');
+    if (del) del.click();
+    L.delModal = !document.getElementById('confirm').classList.contains('hidden');
+    await sleep(200);
+    document.getElementById('confirmYes').click();
+    await sleep(1200);
+    L.delCalled = hasCall(callsSince(n0), /--del /);
+    L.delBanner = bannerText();
+
+    /* b) 清空历史 */
+    var n1 = (window.__calls || []).length;
+    document.getElementById('btnLogClear').click();
+    L.clearModal = !document.getElementById('confirm').classList.contains('hidden');
+    await sleep(200);
+    document.getElementById('confirmYes').click();
+    await sleep(1200);
+    L.clearCalled = hasCall(callsSince(n1), /--clear/);
+    L.clearBanner = bannerText();
+
+    /* c) 改保留上限 */
+    var n2 = (window.__calls || []).length;
+    var sel = document.getElementById('logMax');
+    if (sel) {
+      sel.value = '10';
+      sel.dispatchEvent(new Event('change'));
+    }
+    await sleep(1200);
+    L.maxCalled = hasCall(callsSince(n2), /--setmax 10/) ? '10' : '';
+    L.maxValue = (document.getElementById('logMax') || {}).value || '';
+
+    /* d) 删失败：原因要显示出来 */
+    window.__delFail = '删不掉（没有写权限？）';
+    var n3 = (window.__calls || []).length;
+    var del2 = document.querySelector('#logList .lt-del');
+    if (del2) del2.click();
+    await sleep(200);
+    document.getElementById('confirmYes').click();
+    await sleep(1200);
+    L.failBanner = bannerText();
+    L.failListRows = document.querySelectorAll('#logList li').length;
+    window.__delFail = '';
+
+    liveBtn.click();
+    L.done = true;
   }
 
   /* 性能断言：连续两次采集后，温度列表的节点还是同一批（没有重建），
@@ -661,6 +767,7 @@ def fake_fixtures(now):
 
     rows = ["log_dir=/data/adb/dtbo_charge_unlock/chargelog",
             "log_interval=10",
+            "log_max=40",
             "log_dir_ok=1",
             "log_count=%d" % len(specs),
             "log_current=" + name_of(specs[2][0]),

@@ -326,6 +326,10 @@ kill "$_newpid" 2>/dev/null
 kill "$_other" 2>/dev/null
 # 真正拉起来的采集进程必须停干净，否则它会在后面的用例里往同一个目录
 # 新建会话、做日志轮转，把别的用例的文件删掉（偶发失败的来源）
+PROC_ROOT="$SB/proc" SYSFS_ROOT="$SYS" MODDIR="$MOD" sh "$MODDIR_SRC/chargelog.sh" stop >/dev/null 2>&1
+sleep 1
+# 真正拉起来的采集进程必须停干净，否则它会在后面的用例里往同一个目录
+# 新建会话、做日志轮转，把别的用例的文件删掉（偶发失败的来源）
 PROC_ROOT="$SB/proc" SYSFS_ROOT="$SYS" MODDIR="$MOD" sh "$MOD/chargelog.sh" stop >/dev/null 2>&1
 sleep 1
 
@@ -351,6 +355,10 @@ _newpid=$(cat "$LOGDIR/.pid" 2>/dev/null)
 	&& ok "卡住的进程被换掉（$_newpid）" || bad "卡住的进程没被换掉 [$_newpid]"
 kill "$_newpid" 2>/dev/null
 kill "$_stuck" 2>/dev/null
+# 真正拉起来的采集进程必须停干净，否则它会在后面的用例里往同一个目录
+# 新建会话、做日志轮转，把别的用例的文件删掉（偶发失败的来源）
+PROC_ROOT="$SB/proc" SYSFS_ROOT="$SYS" MODDIR="$MOD" sh "$MODDIR_SRC/chargelog.sh" stop >/dev/null 2>&1
+sleep 1
 # 真正拉起来的采集进程必须停干净，否则它会在后面的用例里往同一个目录
 # 新建会话、做日志轮转，把别的用例的文件删掉（偶发失败的来源）
 PROC_ROOT="$SB/proc" SYSFS_ROOT="$SYS" MODDIR="$MOD" sh "$MOD/chargelog.sh" stop >/dev/null 2>&1
@@ -522,6 +530,118 @@ _v=$(grep '^log_list_done=' "$SB/names.txt" | cut -d= -f2-)
 # 状态区也要在，否则退到兜底时页面上的「记录中/未在记录」会变空
 _v=$(grep -c '^log_dir_ok=' "$SB/names.txt")
 [ "$_v" = "1" ] && ok "--names 也带状态区" || bad "--names 少了 log_dir_ok"
+
+echo "== 删掉一次记录 =="
+# 页面上每一行右侧的 ×。删的只是这一个日志文件，别的会话一个都不能少。
+rm -rf "$LOGDIR"
+mkdir -p "$LOGDIR"
+for _d in 01 02 03; do
+	cat > "$LOGDIR/202510${_d}-100000.log" <<'EOF'
+#dtbo-chargelog v2
+#start=1759284000
+1759284010,40,320,2000000,4000000,1000,Charging,8000000,9000000,3000000,330
+#end=1759284030
+EOF
+done
+CHARGELOG_DIR="$LOGDIR" MODDIR="$MOD" \
+	sh "$MODDIR_SRC/monitor.sh" --del 20251002-100000.log > "$SB/del.txt" 2>&1
+_v=$(grep '^del_ok=' "$SB/del.txt" | cut -d= -f2-)
+[ "$_v" = "1" ] && ok "删除返回成功" || bad "del_ok [$_v] 应为 1"
+[ -f "$LOGDIR/20251002-100000.log" ] && bad "该删的还在" || ok "指定的文件删掉了"
+[ -f "$LOGDIR/20251001-100000.log" ] && [ -f "$LOGDIR/20251003-100000.log" ] \
+	&& ok "别的会话一个没少" || bad "误删了别的会话"
+
+echo "== 删除要挡住路径穿越 =="
+# --del 的名字来自页面，但脚本自己必须再挡一次：带 / 或 .. 的名字能把删除
+# 变成「删任意文件」。这里用一个真实存在的文件验证它删不掉。
+printf 'keep me\n' > "$SB/keepme.txt"
+for _bad in "../keepme.txt" "a/../../keepme.txt" "" ; do
+	CHARGELOG_DIR="$LOGDIR" MODDIR="$MOD" \
+		sh "$MODDIR_SRC/monitor.sh" --del "$_bad" > "$SB/delbad.txt" 2>&1
+	_v=$(grep '^del_err=' "$SB/delbad.txt" | cut -d= -f2-)
+	[ -n "$_v" ] && ok "非法名字被挡住（${_bad:-空}）" || bad "非法名字 [$_bad] 没被挡住"
+done
+[ -f "$SB/keepme.txt" ] && ok "目录外的文件没被动" || bad "目录外的文件被删了"
+
+echo "== 正在记录的那一次不能删 =="
+# 删掉正在写的文件，记录进程还在往那个已经不存在的 inode 里写，
+# 页面上这次充电就再也看不见了 —— 看起来像「记录突然没了」。
+rm -rf "$LOGDIR"
+mkdir -p "$LOGDIR"
+printf '#dtbo-chargelog v2\n#start=1759285000\n' > "$LOGDIR/20251005-100000.log"
+printf '20251005-100000.log\n' > "$LOGDIR/.current"
+CHARGELOG_DIR="$LOGDIR" MODDIR="$MOD" \
+	sh "$MODDIR_SRC/monitor.sh" --del 20251005-100000.log > "$SB/delcur.txt" 2>&1
+_v=$(grep '^del_err=' "$SB/delcur.txt" | cut -d= -f2-)
+case "$_v" in
+	*记录*) ok "正在记录的被拒绝（$_v）" ;;
+	*) bad "正在记录的没被拒绝 [$_v]" ;;
+esac
+[ -f "$LOGDIR/20251005-100000.log" ] && ok "正在记录的文件还在" || bad "正在记录的文件被删了"
+
+echo "== 清空历史，但留着正在记录的那一次 =="
+rm -rf "$LOGDIR"
+mkdir -p "$LOGDIR"
+for _d in 01 02 03; do
+	printf '#dtbo-chargelog v2\n#start=1759284000\n#end=1759284030\n' \
+		> "$LOGDIR/202510${_d}-100000.log"
+done
+printf '#dtbo-chargelog v2\n#start=1759285000\n' > "$LOGDIR/20251005-100000.log"
+printf '20251005-100000.log\n' > "$LOGDIR/.current"
+CHARGELOG_DIR="$LOGDIR" MODDIR="$MOD" \
+	sh "$MODDIR_SRC/monitor.sh" --clear > "$SB/clear.txt" 2>&1
+_v=$(grep '^del_count=' "$SB/clear.txt" | cut -d= -f2-)
+[ "$_v" = "3" ] && ok "清空删了 3 个" || bad "del_count [$_v] 应为 3"
+_v=$(grep '^del_kept=' "$SB/clear.txt" | cut -d= -f2-)
+[ "$_v" = "1" ] && ok "报了「留着正在记录的」" || bad "del_kept [$_v] 应为 1"
+[ -f "$LOGDIR/20251005-100000.log" ] && ok "正在记录的留着" || bad "正在记录的也被清了"
+_cnt=0
+for _f in "$LOGDIR"/*.log; do [ -f "$_f" ] && _cnt=$((_cnt + 1)); done
+[ "$_cnt" = "1" ] && ok "清空后只剩 1 个" || bad "清空后还剩 $_cnt 个"
+# .current 是状态文件，不是会话，不能跟着一起删
+[ -f "$LOGDIR/.current" ] && ok "状态文件没被当会话删掉" || bad ".current 被删了"
+
+echo "== 保留上限写回 config.conf 并立刻生效 =="
+rm -rf "$LOGDIR"
+mkdir -p "$LOGDIR"
+for _d in 01 02 03 04; do
+	printf '#dtbo-chargelog v2\n#start=1759284000\n#end=1759284030\n' \
+		> "$LOGDIR/202510${_d}-100000.log"
+done
+printf 'CHARGELOG_MAX=40\nCHARGELOG_DIR=%s\n' "$LOGDIR" > "$MOD/config.conf"
+CHARGELOG_DIR="$LOGDIR" MODDIR="$MOD" \
+	sh "$MODDIR_SRC/monitor.sh" --setmax 2 > "$SB/setmax.txt" 2>&1
+_v=$(grep '^log_max=' "$SB/setmax.txt" | cut -d= -f2-)
+[ "$_v" = "2" ] && ok "返回新的上限 2" || bad "log_max [$_v] 应为 2"
+_v=$(grep '^CHARGELOG_MAX=' "$MOD/config.conf" | cut -d= -f2-)
+[ "$_v" = "2" ] && ok "config.conf 写进去了（$_v）" || bad "config.conf [$_v] 应为 2"
+_cnt=0
+for _f in "$LOGDIR"/*.log; do [ -f "$_f" ] && _cnt=$((_cnt + 1)); done
+[ "$_cnt" = "2" ] && ok "立刻清到只剩 2 个" || bad "还剩 $_cnt 个，应为 2"
+# 留下的是最新的那两个
+[ -f "$LOGDIR/20251004-100000.log" ] && [ -f "$LOGDIR/20251003-100000.log" ] \
+	&& ok "留下的是最新的" || bad "留下的不是最新的"
+_v=$(grep '^log_max=' "$SB/mixed.txt" | cut -d= -f2-)
+[ -n "$_v" ] && ok "--logs 也报保留上限（$_v）" || bad "--logs 没报 log_max"
+
+echo "== 上限设成 0 就是不自动删 =="
+printf 'CHARGELOG_MAX=40\nCHARGELOG_DIR=%s\n' "$LOGDIR" > "$MOD/config.conf"
+CHARGELOG_DIR="$LOGDIR" MODDIR="$MOD" \
+	sh "$MODDIR_SRC/monitor.sh" --setmax 0 > "$SB/setmax0.txt" 2>&1
+_v=$(grep '^del_count=' "$SB/setmax0.txt" | cut -d= -f2-)
+[ "$_v" = "0" ] && ok "设成 0 时一个都不删" || bad "del_count [$_v] 应为 0"
+# chargelog.sh 也要认这个 0，否则「关掉自动清理」只对页面有效
+rm -rf "$LOGDIR"
+mkdir -p "$LOGDIR"
+for _d in 01 02 03; do
+	printf '#dtbo-chargelog v2\n#start=1759284000\n#end=1759284030\n' \
+		> "$LOGDIR/202510${_d}-100000.log"
+done
+CHARGELOG_DIR="$LOGDIR" MODDIR="$MOD" sh "$MODDIR_SRC/chargelog.sh" once >/dev/null 2>&1
+_cnt=0
+for _f in "$LOGDIR"/*.log; do [ -f "$_f" ] && _cnt=$((_cnt + 1)); done
+[ "$_cnt" -ge 3 ] && ok "MAX=0 时 chargelog 不删旧记录（$_cnt 个）" \
+	|| bad "MAX=0 时被删成了 $_cnt 个"
 
 echo ""
 if [ "$fail" -eq 0 ]; then

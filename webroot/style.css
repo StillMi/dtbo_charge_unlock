@@ -721,3 +721,63 @@ footer strong { color: var(--text); font-weight: 600; }
 @media (min-width: 520px) {
   .grid { grid-template-columns: repeat(6, 1fr); }
 }
+
+/* ------------------------------------------------- 日志：清理与保留上限 --- */
+.logtools {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.logkeep {
+  font-size: 12.5px;
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.logkeep select {
+  appearance: none;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--text);
+  background: var(--card-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 5px 8px;
+  min-width: 62px;
+  text-align: center;
+}
+.logkeep select:active { transform: scale(.98); }
+
+.linkbtn.danger { color: var(--bad); }
+
+/* 每一行右侧的删除按钮。手机上没有 hover，所以它一直显示 ——
+   但做得小、做得轻，不跟「点进去看详情」抢注意力。 */
+.loglist .lt-del {
+  appearance: none;
+  flex: none;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+.loglist .lt-del:active { background: rgba(248,81,73,.14); color: var(--bad); }
+.loglist .lt-right {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}

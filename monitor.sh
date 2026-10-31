@@ -79,7 +79,13 @@ kv "$CFG" CHARGELOG_INTERVAL
 LOG_INTERVAL="$_KV"
 case "$LOG_INTERVAL" in ''|*[!0-9]*) LOG_INTERVAL=10 ;; esac
 
+# 最多保留多少个会话（超出后删最旧的）。0 = 不自动清理。
+kv "$CFG" CHARGELOG_MAX
+LOG_MAX="$_KV"
+case "$LOG_MAX" in ''|*[!0-9]*) LOG_MAX=40 ;; esac
+
 BEATF="$LOGDIR/.beat"
+CURF="$LOGDIR/.current"
 
 # .pid 里的号码是不是真的还属于采集进程（跟 chargelog.sh 的 alive() 同一套判据）。
 # 只看 kill -0 会把「号码已经被别的进程复用」当成还活着，页面就一直显示「记录中」。
@@ -95,6 +101,7 @@ alive() {
 log_state() {
 	emit log_dir      "$LOGDIR"
 	emit log_interval "$LOG_INTERVAL"
+	emit log_max      "$LOG_MAX"
 
 	if [ -d "$LOGDIR" ]; then emit log_dir_ok 1; else emit log_dir_ok 0; fi
 
@@ -530,10 +537,109 @@ list_names() {
 	return 0
 }
 
+# --------------------------------------------------------- 删除 / 清理 ---
+# 会话名只允许我们自己的命名（YYYYmmdd-HHMMSS.log，撞名时带 -N 后缀）。
+# 不允许路径分隔符和 ..，否则 --del 就成了任意文件删除。
+_valid_name() {
+	case "$1" in
+		''|*/*|*\*|*..*) return 1 ;;
+	esac
+	case "$1" in
+		*.log) return 0 ;;
+	esac
+	return 1
+}
+
+# 正在写的那一个不能删：删掉以后记录进程还在往这个已经不存在的 inode 里写，
+# 页面上就再也看不到这次充电了，看起来像「记录突然没了」。
+_is_current() {
+	rv "$CURF"
+	[ -n "$_RV" ] && [ "$_RV" = "$1" ] && return 0
+	return 1
+}
+
+del_session() {
+	_name="$2"
+	if ! _valid_name "$_name"; then emit del_err "会话名不合法"; exit 1; fi
+	_f="$LOGDIR/$_name"
+	[ -f "$_f" ] || { emit del_err "找不到会话 $_name"; exit 1; }
+	if _is_current "$_name"; then emit del_err "这次充电还在记录中，拔掉之后才能删"; exit 1; fi
+	rm -f "$_f" 2>/dev/null
+	[ -f "$_f" ] && { emit del_err "删不掉（没有写权限？）"; exit 1; }
+	emit del_ok 1
+	emit del_name "$_name"
+}
+
+# 清空历史：正在记录的那一次留着，不然等于把这次充电的记录也抹掉。
+clear_all() {
+	_cur=""
+	rv "$CURF"
+	_cur="$_RV"
+	_n=0
+	_keep=0
+	for _f in "$LOGDIR"/*.log; do
+		[ -f "$_f" ] || continue
+		_nm=${_f##*/}
+		if [ -n "$_cur" ] && [ "$_nm" = "$_cur" ]; then _keep=1; continue; fi
+		rm -f "$_f" 2>/dev/null
+		[ -f "$_f" ] || _n=$((_n + 1))
+	done
+	emit del_ok 1
+	emit del_count "$_n"
+	emit del_kept "$_keep"
+}
+
+# 设置保留上限并立刻清一次。写的是 config.conf —— 和 FFC_TEMP_HIGH 一样，
+# 配置是唯一事实来源，不另存状态文件。
+set_max() {
+	_n="$2"
+	case "$_n" in ''|*[!0-9]*) emit del_err "保留数量不合法"; exit 1 ;; esac
+	[ "$_n" -le 999 ] || { emit del_err "保留数量最多 999"; exit 1; }
+	_cfg="$MODDIR/config.conf"
+	if [ ! -f "$_cfg" ]; then emit del_err "找不到 config.conf"; exit 1; fi
+	if grep -q '^CHARGELOG_MAX=' "$_cfg" 2>/dev/null; then
+		sed -i "s|^CHARGELOG_MAX=.*|CHARGELOG_MAX=$_n|" "$_cfg" 2>/dev/null
+	else
+		printf 'CHARGELOG_MAX=%s
+' "$_n" >> "$_cfg" 2>/dev/null
+	fi
+	kv "$_cfg" CHARGELOG_MAX
+	[ "$_KV" = "$_n" ] || { emit del_err "config.conf 写不进去"; exit 1; }
+
+	# 立刻按新上限删一遍（0 = 不清理）
+	_gone=0
+	if [ "$_n" -ge 1 ]; then
+		_cur=""
+		rv "$CURF"
+		_cur="$_RV"
+		_cnt=0
+		for _f in "$LOGDIR"/*.log; do
+			[ -f "$_f" ] && _cnt=$((_cnt + 1))
+		done
+		if [ "$_cnt" -gt "$_n" ]; then
+			_rest=$((_cnt - _n))
+			# 从最旧的开始删（glob 是升序，也就是时间升序）
+			for _f in "$LOGDIR"/*.log; do
+				[ -f "$_f" ] || continue
+				[ "$_rest" -le 0 ] && break
+				_nm=${_f##*/}
+				if [ -n "$_cur" ] && [ "$_nm" = "$_cur" ]; then continue; fi
+				rm -f "$_f" 2>/dev/null && [ ! -f "$_f" ] && { _gone=$((_gone + 1)); _rest=$((_rest - 1)); }
+			done
+		fi
+	fi
+	emit del_ok 1
+	emit del_count "$_gone"
+	emit log_max "$_n"
+}
+
 case "$MODE" in
 	--logs)  list_sessions; exit 0 ;;
 	--names) list_names;    exit 0 ;;
 	--log)   dump_session "$@"; exit 0 ;;
+	--del)   del_session "$@"; exit 0 ;;
+	--clear) clear_all; exit 0 ;;
+	--setmax) set_max "$@"; exit 0 ;;
 esac
 
 # ============================================================ 实时采集 =========

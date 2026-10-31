@@ -223,6 +223,19 @@
         点一下就能拉起来，不会写任何分区。
       </p>
     </div>
+    <div class="logtools">
+      <label class="logkeep" for="logMax">自动保留最近
+        <select id="logMax">
+          <option value="10">10</option>
+          <option value="20">20</option>
+          <option value="40">40</option>
+          <option value="80">80</option>
+          <option value="0">不限</option>
+        </select> 次
+      </label>
+      <button class="linkbtn danger" id="btnLogClear" type="button">清空历史</button>
+    </div>
+    <p class="fine" id="logKeepNote">删的只是日志文件，不碰分区，也不影响已经刷进去的 dtbo。</p>
     <ul class="loglist" id="logList"></ul>
   </section>
 

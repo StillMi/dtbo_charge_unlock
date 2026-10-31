@@ -98,7 +98,8 @@ MAXN="$_KV"
 case "$MAXN" in
 	''|*[!0-9]*) MAXN=40 ;;
 esac
-[ "$MAXN" -ge 1 ] || MAXN=1
+# 0 = 不自动清理（页面里可以关掉自动清理）
+[ "$MAXN" -ge 0 ] || MAXN=40
 
 kv "$CFG" CHARGELOG
 ENABLED="$_KV"
@@ -186,18 +187,23 @@ chg_temp() {
 
 # --------------------------------------------------------------- 会话文件 ---
 
-# 只保留最近 MAXN 个会话
+# 只保留最近 MAXN 个会话（MAXN=0 表示不自动清理）
 prune() {
+	# 0 = 不自动清理
+	[ "$MAXN" -ge 1 ] || return 0
 	_cnt=0
 	for _f in "$LOGDIR"/*.log; do
 		[ -f "$_f" ] && _cnt=$((_cnt + 1))
 	done
 	[ "$_cnt" -le "$MAXN" ] && return 0
-	ls -1t "$LOGDIR"/*.log 2>/dev/null \
-		| tail -n "+$((MAXN + 1))" \
-		| while IFS= read -r _old; do
-			[ -n "$_old" ] && rm -f "$_old"
-		done
+	# 从最旧的开始删。日志名是 YYYYmmdd-HHMMSS.log，glob 升序就是时间升序，
+	# 用内建判断数着删，不 fork ls / tail / 管道（管道里的 while 还是子 shell）。
+	_rest=$((_cnt - MAXN))
+	for _f in "$LOGDIR"/*.log; do
+		[ -f "$_f" ] || continue
+		[ "$_rest" -le 0 ] && break
+		rm -f "$_f" 2>/dev/null && [ ! -f "$_f" ] && _rest=$((_rest - 1))
+	done
 }
 
 begin_session() {
