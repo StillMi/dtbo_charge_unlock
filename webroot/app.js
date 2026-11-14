@@ -801,7 +801,7 @@
     if (name === 'logs') {
       /* 日志页不做 2 秒的 sysfs 轮询，但必须换成一个慢速刷新：
          之前是完全停掉，结果插拔充电器后「记录中 / 等待插上」一直不动，
-         看起来像没写日志。日志只是一次目录扫描，5 秒一次不费电。 */
+         看起来像没写日志。未变化的历史会话复用摘要，刷新不再逐行读全部历史。 */
       stopTimer();
       /* 已经画过一次列表就不要再清成「读取中…」重画：直接留着旧内容，
          在后台静默刷新（指纹没变时一个节点都不会动）。这才是切换跟手的关键。 */
@@ -844,7 +844,7 @@
     if (mx !== null && !logMaxBusy) {
       var sel = $('logMax');
       var want = String(mx);
-      if (sel && sel.value !== want && !logBusy) {
+      if (sel && sel.value !== want) {
         var has = false;
         for (var oi = 0; oi < sel.options.length; oi++) {
           if (sel.options[oi].value === want) { has = true; break; }
@@ -972,8 +972,20 @@
     }
   }
 
+  var logRequest = null;
+  var logReload = false;
+  var sessionRequestId = 0;
   function loadLogs(silent) {
-    return loadLogsRun(silent, 0);
+    // A slow device must never accumulate a new shell scan every five seconds.
+    if (logRequest) {
+      if (logBusy) logReload = true; // mutation completed: fetch fresh state once
+      return logRequest;
+    }
+    logRequest = loadLogsRun(silent, 0).then(function () {
+      logRequest = null;
+      if (logReload) { logReload = false; return loadLogs(true); }
+    }, function () { logRequest = null; });
+    return logRequest;
   }
 
   /* ---- 删掉一次记录 / 清空历史 / 自动保留上限 ---- */
@@ -1037,9 +1049,10 @@
   }
 
   function setLogMax(v) {
-    if (logBusy) return;
+    if (logBusy) return Promise.resolve();
     logBusy = true;
-    exec('sh ' + moduleDir() + '/monitor.sh --setmax ' + v, 20000)
+    logMaxBusy = true;
+    return exec('sh ' + moduleDir() + '/monitor.sh --setmax ' + v, 20000)
       .then(function (res) {
         var k = parseKV(res.stdout || '');
         var err = (k['del_err'] || '').trim();
@@ -1049,14 +1062,16 @@
         }
         var n = num(k['del_count']) || 0;
         if (n > 0) banner('保留上限改成 ' + v + '，顺手删掉了 ' + n + ' 个旧记录。', 'ok');
+        logMaxBusy = false;
         return loadLogs(true);
       })
       .catch(function (e) {
         banner('改不了保留数量：' + (e && e.message ? e.message : e), 'err');
         /* 失败了就把下拉框拨回真实值，别让界面撒谎 */
+        logMaxBusy = false;
         return loadLogs(true);
       })
-      .then(function () { logBusy = false; });
+      .then(function () { logBusy = false; logMaxBusy = false; });
   }
 
   /* mode 决定这次让 monitor.sh 怎么列：
@@ -1200,7 +1215,7 @@
     var a = [];
     for (var i = 0; i < list.length; i++) {
       var s = list[i];
-      a.push(s.name + ':' + s.end + ':' + s.samples + ':' + s.cap1 + ':' + s.pmax);
+      a.push(s.name + ':' + s.start + ':' + s.aborted + ':' + s.tmax + ':' + s.cap0 + ':' + s.end + ':' + s.samples + ':' + s.cap1 + ':' + s.pmax);
     }
     return a.join('|');
   }
@@ -1294,6 +1309,8 @@
   }
 
   function openSession(name) {
+    var requestId = ++sessionRequestId;
+    logCur = null;
     $('logListCard').classList.add('hidden');
     $('logDetail').classList.remove('hidden');
     setText('logTitle', String(name).replace(/\.log$/, ''));
@@ -1304,7 +1321,9 @@
 
     return exec('sh ' + moduleDir() + '/monitor.sh --log ' + shellQuote(name), 30000)
       .then(function (res) {
+        if (requestId !== sessionRequestId) return;
         var k = parseKV(res.stdout || '');
+        if (res.errno !== 0 || k.log_err) throw new Error(k.log_err || res.stderr || '读取会话失败');
         var n = num(k['session.count']) || 0;
         var pts = [];
 
@@ -1353,6 +1372,7 @@
         renderSession(logCur);
       })
       .catch(function (err) {
+        if (requestId !== sessionRequestId) return;
         stats.innerHTML = '';
         var e1 = document.createElement('dt');
         e1.textContent = '错误';
@@ -1364,10 +1384,11 @@
   }
 
   function backToList() {
+    ++sessionRequestId;
     logCur = null;
     $('logDetail').classList.add('hidden');
     $('logListCard').classList.remove('hidden');
-    loadLogs();
+    loadLogs(true);
   }
 
   function bootLogs() {
@@ -1381,11 +1402,7 @@
     $('btnLogBack').addEventListener('click', backToList);
     $('btnLogClear').addEventListener('click', clearAllLogs);
     $('logMax').addEventListener('change', function () {
-      var v = this.value;
-      logMaxBusy = true;
-      setLogMax(v);
-      /* 命令回来后由 loadLogs 里的 log_max 校准，这里只负责解锁 */
-      setTimeout(function () { logMaxBusy = false; }, 3000);
+      setLogMax(this.value);
     });
 
     $('btnLogStart').addEventListener('click', function () {
@@ -1473,7 +1490,7 @@
     if (timer) { clearInterval(timer); timer = null; }
   }
 
-  /* 日志页的慢速刷新：只读日志目录，不碰 sysfs 也不读分区。
+  /* 日志页的慢速刷新：读取日志摘要及少量充电状态，不读分区。
      打开会话详情时暂停列表刷新，免得把用户正在看的图刷没。 */
   var LOG_POLL_MS = 5000;
 
@@ -1482,7 +1499,7 @@
     if (!autoOn) return;
     logTimer = setInterval(function () {
       if (document.hidden) return;
-      if (tab !== 'logs') return;
+      if (tab !== 'logs' || logBusy || logRequest) return;
       if (!$('logDetail').classList.contains('hidden')) return;
       loadLogs(true);
     }, LOG_POLL_MS);
@@ -1681,14 +1698,14 @@
     toggle.addEventListener('change', function () {
       autoOn = toggle.checked;
       if (!autoOn) { stopTimer(); stopLogTimer(); return; }
-      if (tab === 'logs') { loadLogs(); startLogTimer(); }
+      if (tab === 'logs') { loadLogs(true); startLogTimer(); }
       else { refresh(false); startTimer(); }
     });
 
     document.addEventListener('visibilitychange', function () {
       if (document.hidden) { stopTimer(); stopLogTimer(); }
       else if (!autoOn) { /* 自动刷新关着，回来也不动 */ }
-      else if (tab === 'logs') { loadLogs(); startLogTimer(); }
+      else if (tab === 'logs') { loadLogs(true); startLogTimer(); }
       else { refresh(false); startTimer(); }
     });
 

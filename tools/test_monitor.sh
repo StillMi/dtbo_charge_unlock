@@ -20,7 +20,18 @@ case "$SB" in
 *.[Ee][Xx][Ee]|*.[Dd][Ll][Ll]|*.[Ii][Mm][Gg]|*.[Dd][Tt][Bb]|*.[Dd][Tt][Ss]|*.[Zz][Ii][Pp])
 	echo "沙盒路径不能是文件: $SB" >&2; exit 2 ;;
 esac
-rm -rf "$SB"
+# Resolve the existing target or its parent before destructive cleanup.
+_src=$(cd "$MODDIR_SRC" 2>/dev/null && pwd -P) || exit 2
+if [ -d "$SB" ]; then
+	_target=$(cd "$SB" 2>/dev/null && pwd -P) || exit 2
+else
+	_parent=$(cd "${SB%/*}" 2>/dev/null && pwd -P) || exit 2
+	_target="$_parent/${SB##*/}"
+fi
+case "$_src/" in "$_target/"*) echo "沙盒指向源码或它的父目录" >&2; exit 2 ;; esac
+case "$_target" in /|*'/..'|*'/.') exit 2 ;; esac
+[ ! -f "$_target/module.prop" ] && [ ! -d "$_target/.git" ] || exit 2
+rm -rf "$_target"
 mkdir -p "$SB" || exit 1
 
 SYS="$SB/sys"

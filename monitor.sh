@@ -3,7 +3,7 @@
 # dtbo_charge_unlock 充电状态采集（只读）
 #
 # 输出 key=value，每行一个，供 webroot 的页面解析。
-# 本脚本不写任何文件、不碰任何分区，最多读 sysfs / proc / 模块自己的 state。
+# 实时采集只读；日志命令可维护摘要缓存和用户指定的历史日志，不碰分区。
 #
 # 性能注意（重要）：
 #   实时页面每 2 秒调用一次本脚本，所以「每读一个 sysfs 节点就 fork 几个进程」
@@ -68,6 +68,22 @@ kv() {
 
 CFG="$MODDIR/config.conf"
 MODE="${1:-}"
+
+# Some Android builds omit awk from PATH. Reuse the root manager BusyBox
+# instead of silently parsing thousands of rows in the shell.
+case "$MODE" in
+	--logs|--log)
+		if [ "${MONITOR_NO_AWK:-0}" != "1" ] && ! command -v awk >/dev/null 2>&1; then
+			for _bb in /data/adb/ksu/bin/busybox /data/adb/ap/bin/busybox /data/adb/magisk/busybox; do
+				[ -x "$_bb" ] || continue
+				if "$_bb" awk 'BEGIN {exit 0}' </dev/null >/dev/null 2>&1; then
+					MONITOR_BB="$_bb"
+					awk() { "$MONITOR_BB" awk "$@"; }
+					break
+				fi
+			done
+		fi ;;
+esac
 
 # ------------------------------------------------------------ 充电日志目录 ---
 # 日志放在模块目录之外，升级模块不会丢历史。
@@ -236,6 +252,79 @@ _consume_rows() {
 	done
 }
 
+# Incremental summaries: one stat + one awk; unchanged logs are never opened.
+# Cache failures fall back to the compatibility scanner below.
+list_cached() {
+	command -v stat >/dev/null 2>&1 || return 1
+	_cache="$LOGDIR/.webui-summary-v1"
+	[ ! -e "$_cache" ] || [ -f "$_cache" ] || return 1
+	_tmp="$_cache.$$"
+	# Whitespace paths use the old scanner rather than splitting stat arguments.
+	case "$LOGDIR" in *' '*|*'|'*) return 1 ;; esac
+	_meta=$(stat -c '%n|%i|%s|%y|%z' $_files 2>/dev/null) || return 1
+	_fast=$(printf '%s\n' "$_meta" | awk -F'|' -v cache="$_cache" -v tmp="$_tmp" '
+		function scan(path,    line,f,n,i,v,p) {
+			st=""; en=""; ab=0; cnt=0; c0=""; c1=""; cf=""; cl=""
+			tm=0; im=0; vm=0; pm=0
+			while ((r=(getline line < path)) > 0) {
+				if (line ~ /^#start=/) {st=substr(line,8); continue}
+				if (line ~ /^#end=/) {en=substr(line,6); continue}
+				if (line ~ /^#aborted=1/) {ab=1; continue}
+				if (line ~ /^#/ || line == "") continue
+				n=split(line,f,","); if(n<2) continue
+				cnt++; if(cnt==1) {c0=f[2]; cf=f[6]}
+				c1=f[2]; cl=f[6]
+				if(f[3]+0>tm) tm=f[3]+0
+				i=f[4]+0; if(i<0)i=-i; v=f[5]+0
+				if(i>im)im=i; if(v>vm)vm=v
+				p=(n>=8 ? (f[8]+0)/1000 : 0)
+				if(p<=0 && v>0 && i>0)p=(i/1000)*(v/1000)/1000
+				if(p>pm)pm=p
+			}
+			close(path); if(r<0) failed=1
+			return sprintf("%s|%s|%d|%d|%s|%s|%d|%d|%d|%d|%s|%s",st,en,ab,cnt,c0,c1,tm,im,vm,pm,cf,cl)
+		}
+		BEGIN {
+			count=0; hits=0; misses=0
+			while ((getline line < cache)>0) {
+				n=split(line,a,"|"); if(n!=17)continue
+				sig[a[1]]=a[2] "|" a[3] "|" a[4] "|" a[5]
+				row[a[1]]=a[6]; for(j=7;j<=17;j++)row[a[1]]=row[a[1]] "|" a[j]
+			}
+			close(cache)
+			split("start end aborted samples cap0 cap1 temp_max cur_max volt_max pmax_mw cnt0 cnt1",keys," ")
+		}
+		NF==5 {
+			path=$1; stamp=$2 "|" $3 "|" $4 "|" $5
+			if(sig[path]==stamp) {result=row[path]; hits++}
+			else {result=scan(path); misses++}
+			names[count]=path; sub(/.*\//,"",names[count]); rows[count]=result
+			print $0 "|" result > tmp
+			count++
+		}
+		END {
+			close(tmp); if(failed || count==0)exit 1
+			printf "log_cache=%d/%d\n",hits,misses
+			for(i=0;i<count;i++) {
+				printf "log.%d.name=%s\n",i,names[i]
+				split(rows[i],f,"|")
+				for(j=1;j<=12;j++)printf "log.%d.%s=%s\n",i,keys[j],f[j]
+			}
+			printf "log.list_count=%d\nlog_scan=%d/1/%d/%d\nlog_list_done=1\n",count,count,count,count
+		}
+	' 2>/dev/null)
+	_rc=$?
+	if [ "$_rc" -eq 0 ] && [ -n "$_fast" ]; then
+		# Unique temp + atomic rename: parallel readers never see half a cache.
+		[ ! -f "$_tmp" ] || mv -f "$_tmp" "$_cache" 2>/dev/null
+		printf '%s\n' "$_fast"
+		return 0
+	fi
+	# Only our own PID-scoped scratch file is removed.
+	[ ! -f "$_tmp" ] || rm -f "$_tmp"
+	return 1
+}
+
 list_sessions() {
 	log_state
 
@@ -273,6 +362,10 @@ list_sessions() {
 	_have_awk=0
 	if command -v awk >/dev/null 2>&1 && [ "${MONITOR_NO_AWK:-0}" != "1" ]; then
 		_have_awk=1
+	fi
+
+	if [ "$_have_awk" = "1" ] && [ "${MONITOR_NO_CACHE:-0}" != "1" ]; then
+		list_cached && return 0
 	fi
 
 	# 第一轮：一次 awk 扫完全部文件（一次 fork，快）。
@@ -490,6 +583,16 @@ dump_session() {
 		exit 1
 	fi
 
+	if command -v awk >/dev/null 2>&1 && [ "${MONITOR_NO_AWK:-0}" != "1" ]; then
+		awk -v name="$_name" '
+			/^#start=/ {st=substr($0,8); next}
+			/^#end=/ {en=substr($0,6); next}
+			/^#aborted=1/ {ab=1; next}
+			/^#/ || /^$/ {next}
+			{ if(i<4000) {printf "session.s.%d=%s\n",i,$0; i++} }
+			END {printf "session.name=%s\nsession.start=%s\nsession.end=%s\nsession.aborted=%d\nsession.count=%d\n",name,st,en,ab,i}
+		' "$_f" && return 0
+	fi
 	_st=""; _en=""; _ab=0; _i=0
 	while IFS= read -r _l || [ -n "$_l" ]; do
 		case "$_l" in
@@ -498,9 +601,10 @@ dump_session() {
 			'#aborted=1') _ab=1 ;;
 			'#'*|'')      ;;
 			*)
-				emit "session.s.$_i" "$_l"
-				_i=$((_i + 1))
-				[ "$_i" -ge 4000 ] && break
+				if [ "$_i" -lt 4000 ]; then
+					emit "session.s.$_i" "$_l"
+					_i=$((_i + 1))
+				fi
 				;;
 		esac
 	done < "$_f"
@@ -542,7 +646,7 @@ list_names() {
 # 不允许路径分隔符和 ..，否则 --del 就成了任意文件删除。
 _valid_name() {
 	case "$1" in
-		''|*/*|*\*|*..*) return 1 ;;
+		''|*/*|*'\'*|*..*) return 1 ;;
 	esac
 	case "$1" in
 		*.log) return 0 ;;

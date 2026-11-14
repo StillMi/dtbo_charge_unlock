@@ -189,6 +189,12 @@ chg_temp() {
 
 # 只保留最近 MAXN 个会话（MAXN=0 表示不自动清理）
 prune() {
+	# WebUI can change the limit while this collector process stays alive.
+	kv "$CFG" CHARGELOG_MAX
+	MAXN="$_KV"
+	case "$MAXN" in ''|*[!0-9]*) MAXN=40 ;; esac
+	rv "$CURF"
+	_prune_current="$_RV"
 	# 0 = 不自动清理
 	[ "$MAXN" -ge 1 ] || return 0
 	_cnt=0
@@ -202,6 +208,7 @@ prune() {
 	for _f in "$LOGDIR"/*.log; do
 		[ -f "$_f" ] || continue
 		[ "$_rest" -le 0 ] && break
+		[ "${_f##*/}" = "$_prune_current" ] && continue
 		rm -f "$_f" 2>/dev/null && [ ! -f "$_f" ] && _rest=$((_rest - 1))
 	done
 }

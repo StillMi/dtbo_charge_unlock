@@ -15,7 +15,18 @@ case "$SANDBOX" in
 *.[Ee][Xx][Ee]|*.[Dd][Ll][Ll]|*.[Ii][Mm][Gg]|*.[Dd][Tt][Bb]|*.[Dd][Tt][Ss]|*.[Zz][Ii][Pp])
 	echo "沙盒路径不能是文件: $SANDBOX" >&2; exit 2 ;;
 esac
-rm -rf "$SANDBOX"
+# Resolve the existing target or its parent before destructive cleanup.
+_src=$(cd "$MODDIR" 2>/dev/null && pwd -P) || exit 2
+if [ -d "$SANDBOX" ]; then
+	_target=$(cd "$SANDBOX" 2>/dev/null && pwd -P) || exit 2
+else
+	_parent=$(cd "${SANDBOX%/*}" 2>/dev/null && pwd -P) || exit 2
+	_target="$_parent/${SANDBOX##*/}"
+fi
+case "$_src/" in "$_target/"*) echo "沙盒指向源码或它的父目录" >&2; exit 2 ;; esac
+case "$_target" in /|*'/..'|*'/.') exit 2 ;; esac
+[ ! -f "$_target/module.prop" ] && [ ! -d "$_target/.git" ] || exit 2
+rm -rf "$_target"
 mkdir -p "$SANDBOX/mod"
 
 # ---- 模拟安装器解压出来的模块目录 ----
